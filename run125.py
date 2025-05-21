@@ -1,5 +1,4 @@
-# good version of run110.py
-# (with full diagnostics & correct stretch)
+# good version till now
 
 import networkx as nx
 import math, os, random
@@ -17,6 +16,10 @@ down_link = {}
 
 # ---------------------------- SUBMESH HIERARCHY ----------------------------
 
+def xy_to_id(x,y,size): 
+    return x*size + y
+
+
 def generate_type1_submeshes(size):
     levels = int(math.log2(size)) + 1
     hierarchy = defaultdict(list)
@@ -25,7 +28,8 @@ def generate_type1_submeshes(size):
         for i in range(0, size, b):
             for j in range(0, size, b):
                 nodes = {
-                    (x,y)
+                    # (x,y)
+                    xy_to_id(x,y,size)
                     for x in range(i, min(i+b, size))
                     for y in range(j, min(j+b, size))
                 }
@@ -41,7 +45,8 @@ def generate_type2_submeshes(size):
         for i in range(-off, size, b):
             for j in range(-off, size, b):
                 nodes = {
-                    (x,y)
+                    # (x,y)
+                    xy_to_id(x,y,size)
                     for x in range(i, i+b)
                     for y in range(j, j+b)
                     if 0 <= x < size and 0 <= y < size
@@ -79,7 +84,7 @@ def build_mesh_hierarchy(size):
 
     return H
 
-def print_clusters(H, size):
+def print_clusters(H):
     print("=== Cluster Hierarchy ===")
     levels = sorted(set(lvl for (lvl, _) in H))
     for lvl in levels:
@@ -90,6 +95,7 @@ def print_clusters(H, size):
                 for idx, cl in enumerate(H[key]):
                     print(f"  Cluster {idx}: {sorted(cl)}")
     print("="*40)
+
 
 
 
@@ -133,23 +139,17 @@ def publish(owner, leader_map):
 def measure_stretch(requesters, owner, leader_map, G):
     global down_link
     total_up_down = 0
-    total_opt = 0
+    total_opt     = 0
 
     for r in requesters:
         if r == owner:
             continue
 
-        # 1) Climb spiral
-        sp = get_spiral(r, leader_map, verbose=True)
+        # 1) climb spiral
+        sp = get_spiral(r, leader_map)
         print(f"\nRequester {r}:")
         print(f"  Upward path: {sp}")
 
-        #fins intersection point
-        up_hops = 0
-        intersection = None
-        i = len(sp)-2  # Initialize with last valid index
-        
-        # Find intersection
         up_hops = 0
         intersection = None
         for i in range(len(sp)-1):
@@ -159,9 +159,9 @@ def measure_stretch(requesters, owner, leader_map, G):
                 break
         if intersection is None:
             intersection = sp[-1]
-        print(f"  Intersection at leader: {intersection}")
+        print(f"  Intersection at: {intersection}")
 
-        # Downward path
+        # 2) descend via down_link chain (with fallback)
         down_hops = 0
         cur = intersection
         seen = {cur}
@@ -179,8 +179,9 @@ def measure_stretch(requesters, owner, leader_map, G):
             cur = nxt
         print(f"  Downward path: {down_path}")
 
-        dist_sp = up_hops + down_hops
+        dist_sp  = up_hops + down_hops
         dist_opt = nx.shortest_path_length(G, r, owner)
+
         print(f"  Up hops: {up_hops}")
         print(f"  Down hops: {down_hops}")
         print(f"  Total hops: {dist_sp}")
@@ -188,9 +189,13 @@ def measure_stretch(requesters, owner, leader_map, G):
         print(f"  Stretch: {dist_sp/dist_opt:.3f}")
 
         total_up_down += dist_sp
-        total_opt += dist_opt
+        total_opt     += dist_opt
 
-    return total_up_down / total_opt if total_opt > 0 else 1.0
+        owner = r
+        publish(owner, leader_map)
+
+    return (total_up_down/total_opt) if total_opt>0 else 1.0
+
 
 
 # ---------------------------- GRAPH LOADING ----------------------------
@@ -304,12 +309,11 @@ def simulate(graph_file):
     size = int(math.sqrt(G.number_of_nodes()))
     H = build_mesh_hierarchy(size)
     # In simulate(), after building H:
-    print_clusters(H, size)
+    print_clusters(H)
     leaders = assign_cluster_leaders(H)
 
     results = []
     owner = random.choice(list(G.nodes()))
-    # build our one directory once
     publish(owner, leaders)
 
     for error in ERROR_VALUES:
@@ -317,18 +321,22 @@ def simulate(graph_file):
             for _ in range(NUM_TRIALS):
                 pred    = choose_Vp(G, frac)
                 act     = sample_Q_within_diameter(G, pred, error)
-                # act     = sample_actual(G, pred, error)
                 err     = calculate_error(pred, act, G)
 
-                # ==== FIX #1: measure stretch on the ACTUAL path, not the predicted set! ====
-                stretch = measure_stretch(act, owner, leaders, G)
+                # NEW: For each request in act, requester becomes new owner after request
+                for req in act:
+                    if req == owner:
+                        continue
+                    stretch = measure_stretch([req], owner, leaders, G)
+                    # Optionally print per-request results here
+                    if error > 15:
+                        results.append((frac, 0, err, stretch))
+                    else:
+                        results.append((frac, 1/error, err, stretch))
+                    # Update owner and publish new downward links
+                    owner = req
+                    publish(owner, leaders)
 
-                # Record the results of this run
-                if error > 15:
-                    results.append((frac, 0, err, stretch))
-                else:
-                    results.append((frac, 1/error, err, stretch))
-                # results.append((frac, error, err, stretch))
     return results
 
 # ---------------------------- PLOTTING ----------------------------
