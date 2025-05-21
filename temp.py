@@ -1,149 +1,188 @@
-import math
-import random
+# run110_merged.py
+# Combined version: uses labmate's error plotting and original spiral/multibend logic
+
 import networkx as nx
+import math, os, random
 import matplotlib.pyplot as plt
+from collections import Counter, defaultdict
+import pandas as pd
 
-# global down_link mapping
+# ---------------------------- CONFIGURATION ----------------------------
+PREDICTION_FRACTIONS = [0.03125, 0.0625, 0.125, 0.25, 0.5]
+ERROR_VALUES_2       = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
+NUM_TRIALS           = 1
+DEBUG                = True
+
+# ---------------------------- SUBMESH HIERARCHY ----------------------------
+def generate_type1_submeshes(size):
+    levels = int(math.log2(size)) + 1
+    hierarchy = defaultdict(list)
+    for level in range(levels):
+        b = 2**level
+        for i in range(0, size, b):
+            for j in range(0, size, b):
+                nodes = {(x,y) for x in range(i, min(i+b, size))
+                                for y in range(j, min(j+b, size))}
+                hierarchy[(level,2)].append(nodes)
+    return hierarchy
+
+def generate_type2_submeshes(size):
+    levels = int(math.log2(size))
+    hierarchy = defaultdict(list)
+    for level in range(1, levels):
+        b = 2**level
+        off = b//2
+        for i in range(-off, size, b):
+            for j in range(-off, size, b):
+                nodes = {(x,y) for x in range(i, i+b)
+                                for y in range(j, j+b)
+                                if 0 <= x < size and 0 <= y < size}
+                if nodes:
+                    hierarchy[(level,1)].append(nodes)
+    return hierarchy
+
+def build_mesh_hierarchy(size):
+    H = generate_type1_submeshes(size)
+    H.update(generate_type2_submeshes(size))
+
+    # level 0 unify
+    H[(0,1)] = list(H[(0,2)])
+    # root level
+    hi = int(math.log2(size))
+    all_nodes = {(x,y) for x in range(size) for y in range(size)}
+    H[(hi+1,1)] = [all_nodes]
+    H[(hi+1,2)] = [all_nodes]
+    return H
+
+def assign_cluster_leaders(H):
+    M = defaultdict(list)
+    for lvl_type, clusters in H.items():
+        for cl in clusters:
+            leader = min(cl)
+            M[lvl_type].append((leader,cl))
+    return M
+
+# ---------------------------- PUBLISH / DOWNWARD LINKS ----------------------------
 down_link = {}
-
-# -----------------------------------------------------------------------------
-# Spiral/path utilities (assumed already implemented)
-# -----------------------------------------------------------------------------
 def get_spiral(node, leader_map):
-    # returns the list of leaders from node up to root
-    # (implementation depends on your hierarchy)
-    raise NotImplementedError
-
-# -----------------------------------------------------------------------------
-# Publish: build the directory path for the 'owner'
-# -----------------------------------------------------------------------------
+    path = [node]
+    seen = {node}
+    for lvl_type in sorted(leader_map):
+        for leader, cl in leader_map[lvl_type]:
+            if node in cl and leader not in seen:
+                path.append(leader)
+                seen.add(leader)
+                break
+    return path
 
 def publish(owner, leader_map):
-    """
-    Walk 'owner' ↑ via its full spiral and at each step
-    set down_link[parent] = child so later lookups
-    and moves can reconstruct the root→...→owner chain.
-    """
     global down_link
-    down_link.clear()
     sp = get_spiral(owner, leader_map)
-    # we must convert reversed(sp) to a list so slicing works
+    down_link.clear()
     rev = list(reversed(sp))
-    # link each parent→child pair
     for parent, child in zip(rev, rev[1:]):
         down_link[parent] = child
 
-# -----------------------------------------------------------------------------
-# Stretch measurement: follow up-phase then down_link chain
-# -----------------------------------------------------------------------------
-def measure_stretch(requesters, owner, leader_map, G, DEBUG=False):
-    """
-    For each requester in 'requesters', climb its spiral until
-    hitting a down_link, then descend via down_link to 'owner'.
-    Compare that path-length to the direct shortest-path in G.
-    Returns the ratio total_traversed / total_direct.
-    """
-    global down_link
-    total_up_down = 0
-    total_opt     = 0
+# ---------------------------- ROUTING METRICS ----------------------------
+def calculate_error_updated(Vp, Q, G):
+    diameter = nx.diameter(G)
+    errors = []
+    for req, pred in zip(Q, Vp):
+        d = nx.shortest_path_length(G, source=req, target=pred)
+        errors.append(d/diameter)
+    return max(errors) if errors else 0
 
-    for r in requesters:
-        if r == owner:
-            continue
+def calculate_stretch_spiral(pred_nodes, act_nodes, leader_map, G):
+    sum_spiral = sum_shortest = count = 0
+    for u,v in zip(pred_nodes, act_nodes):
+        if u==v: continue
+        pu = get_spiral(u, leader_map)
+        pv = get_spiral(v, leader_map)
+        common = set(pu)&set(pv)
+        if not common: continue
+        lca = next(n for n in reversed(pu) if n in common)
+        iu,iv = pu.index(lca), pv.index(lca)
+        path = pu[:iu+1]+list(reversed(pv[:iv]))
+        if len(path)<=2: continue
+        dsp = sum(nx.shortest_path_length(G,path[i],path[i+1]) for i in range(len(path)-1))
+        ds  = nx.shortest_path_length(G,u,v)
+        sum_spiral += dsp; sum_shortest += ds; count+=1
+    return sum_spiral/sum_shortest if sum_shortest>0 else 1.0
 
-        # 1) climb spiral until we hit a down_link
-        sp = get_spiral(r, leader_map)
-        up_hops = 0
-        intersection = None
-        for i in range(len(sp)-1):
-            u, v = sp[i], sp[i+1]
-            up_hops += nx.shortest_path_length(G, u, v)
-            if v in down_link:
-                intersection = v
-                break
-        if intersection is None:
-            # fallback: climb all the way to root
-            intersection = sp[-1]
+# ---------------------------- GRAPH LOADING ----------------------------
+def load_graph(file):
+    G = nx.read_graphml(os.path.join("graphs","grid",file))
+    return nx.relabel_nodes(G, lambda x:int(x))
 
-        # 2) descend via down_link chain
-        down_hops = 0
-        cur = intersection
-        while cur != owner:
-            nxt = down_link.get(cur)
-            if nxt is None:
-                raise RuntimeError(f"Broken down_link chain at {cur}")
-            down_hops += nx.shortest_path_length(G, cur, nxt)
-            cur = nxt
+# ---------------------------- SAMPLING ----------------------------
+def choose_Vp(G, fraction):
+    nodes = list(G.nodes()); random.shuffle(nodes)
+    k = int(len(nodes)*fraction)
+    orig = random.choices(nodes, k=k)
+    return orig
 
-        dist_sp  = up_hops + down_hops
-        dist_opt = nx.shortest_path_length(G, r, owner)
+def sample_Q_within_diameter(G, Vp, error):
+    diam = nx.diameter(G)
+    for _ in range(10000):
+        Q = []
+        for v in Vp:
+            dist = nx.single_source_shortest_path_length(G,v,cutoff=int(diam/error) if error>0 else diam)
+            Q.append(random.choice(list(dist.keys())))
+        dups = Counter(Q)
+        extra = sum(c-1 for c in dups.values())
+        if extra/len(Q)*100<=100:
+            return Q
+    random.shuffle(Q)
+    return Q
 
-        if DEBUG:
-            print(f"Req={r}, int={intersection}, up={up_hops}, down={down_hops}, opt={dist_opt}")
-
-        total_up_down += dist_sp
-        total_opt     += dist_opt
-
-    return (total_up_down / total_opt) if total_opt > 0 else 1.0
-
-# -----------------------------------------------------------------------------
-# Simulation driver
-# -----------------------------------------------------------------------------
-def simulate(graph_file,
-             ERROR_VALUES_2,
-             PREDICTION_FRACTIONS,
-             NUM_TRIALS):
+# ---------------------------- SIMULATION ----------------------------
+def simulate(graph_file):
     G = load_graph(graph_file)
     size = int(math.sqrt(G.number_of_nodes()))
     H = build_mesh_hierarchy(size)
     leaders = assign_cluster_leaders(H)
 
-    results = []
     owner = random.choice(list(G.nodes()))
-
-    for error in ERROR_VALUES_2:
+    publish(owner, leaders)
+    results = []
+    for err in ERROR_VALUES_2:
         for frac in PREDICTION_FRACTIONS:
             for _ in range(NUM_TRIALS):
-                pred = choose_Vp(G, frac)
-                act  = sample_actual(G, pred, error)
-
-                # rebuild directory for this trial
-                publish(owner, leaders)
-
-                err     = calculate_error(pred, act, G)
-                stretch = measure_stretch(act, owner, leaders, G)
-
-                results.append((frac, err, stretch))
-
+                Vp = choose_Vp(G, frac)
+                Q  = sample_Q_within_diameter(G, Vp, err)
+                er = calculate_error_updated(Vp,Q,G)
+                st = calculate_stretch_spiral(Vp,Q,leaders,G)
+                results.append((frac,err,er,st))
     return results
 
-# -----------------------------------------------------------------------------
-# Plotting
-# -----------------------------------------------------------------------------
-if __name__ == '__main__':
-    graph_file = 'mesh16x16.edgelist'
-    ERROR_VALUES_2 = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
-    PREDICTION_FRACTIONS = [0.05, 0.10, 0.25, 0.50]
-    NUM_TRIALS         = 50
+# ---------------------------- PLOTTING ----------------------------
+def plot_results(results):
+    df = pd.DataFrame(results, columns=["Frac","ErrRate","Error","Stretch"])
+    avg = df.groupby(["Frac","ErrRate"]).mean().reset_index()
 
-    data = simulate(graph_file,
-                    ERROR_VALUES_2,
-                    PREDICTION_FRACTIONS,
-                    NUM_TRIALS)
-
-    # unpack for plotting
-    fracs, errs, stretches = zip(*data)
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10,4))
-    ax1.plot(fracs, errs, 'o-')
-    ax1.set_title('Error vs Fraction')
-    ax1.set_xlabel('Fraction')
-    ax1.set_ylabel('Measured Error')
-
-    ax2.plot(fracs, stretches, 'o-')
-    ax2.set_title('Stretch vs Fraction')
-    ax2.set_xlabel('Fraction')
-    ax2.set_ylabel('Stretch')
-
+    plt.figure(figsize=(12,5))
+    # Error
+    plt.subplot(1,2,1)
+    for e in ERROR_VALUES_2:
+        sub=avg[avg.ErrRate==e]
+        plt.plot(sub.Frac, sub.Error,'-o',label=f"{e:.1f}")
+    plt.title("Error vs Fraction")
+    plt.xlabel("Fraction")
+    plt.ylabel("Error")
+    plt.legend()
+    # Stretch
+    plt.subplot(1,2,2)
+    for e in ERROR_VALUES_2:
+        sub=avg[avg.ErrRate==e]
+        plt.plot(sub.Frac, sub.Stretch,'-o',label=f"{e:.1f}")
+    plt.title("Stretch vs Fraction")
+    plt.xlabel("Fraction")
+    plt.ylabel("Stretch")
+    plt.legend()
     plt.tight_layout()
     plt.show()
+
+# ---------------------------- MAIN ----------------------------
+if __name__=="__main__":
+    res=simulate("64grid_diameter14test.edgelist")
+    plot_results(res)
