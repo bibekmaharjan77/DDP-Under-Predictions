@@ -309,38 +309,48 @@ def simulate(graph_file):
     G = load_graph(graph_file)
     size = int(math.sqrt(G.number_of_nodes()))
     H = build_mesh_hierarchy(size)
+    # In simulate(), after building H:
     print_clusters(H)
     leaders = assign_cluster_leaders(H)
 
     results = []
+    owner = random.choice(list(G.nodes()))
+    publish(owner, leaders)
+
     for error in ERROR_VALUES:
-      for frac in PREDICTION_FRACTIONS:
-        # ←– ADD THESE TWO LINES HERE
-        owner = random.choice(list(G.nodes()))
-        publish(owner, leaders)
+        for frac in PREDICTION_FRACTIONS:
+            for _ in range(NUM_TRIALS):
+                pred    = choose_Vp(G, frac)
+                act     = sample_Q_within_diameter(G, pred, error)
+                err     = calculate_error(pred, act, G)
 
-        for _ in range(NUM_TRIALS):
-          pred = choose_Vp(G, frac)
-          act  = sample_Q_within_diameter(G, pred, error)
-          err  = calculate_error(pred, act, G)
+                # NEW: For each request in act, requester becomes new owner after request
+                for req in act:
+                    if req == owner:
+                        continue
+                    stretch = measure_stretch([req], owner, leaders, G)
 
-          for req in act:
-            if req == owner: 
-              continue
-            stretch = measure_stretch([req], owner, leaders, G)
 
-            if error > 15:
-              err_rate = 0.0
-            else:
-              err_rate = round(1.0 / error, 1)
+                    # -----------------------------
+                    # Optionally print per-request results here
+                    # if error > 15:
+                    #     results.append((frac, 0, err, stretch))
+                    # else:
+                    #     results.append((frac, 1/error, err, stretch))
+                    # ----------------------------    
 
-            results.append((frac, err_rate, err, stretch))
+                    if error > 15:
+                        err_rate = 0.0
+                    else:
+                        err_rate = round(1.0 / error, 1)
 
-            owner = req
-            publish(owner, leaders)
+                    results.append((frac, err_rate, err, stretch))
+
+                    # Update owner and publish new downward links
+                    owner = req
+                    publish(owner, leaders)
 
     return results
-
 
 # ---------------------------- PLOTTING ----------------------------
 
@@ -389,7 +399,7 @@ def plot_results(results):
     plt.xlabel("Fraction of Predicted Nodes")
     plt.ylabel("Stretch")
     plt.xticks(xvals, [f"{f:.4f}" for f in xvals], rotation=45)
-    # plt.ylim(0.95, 1.05)
+    plt.ylim(0.95, 1.05)
     plt.grid(True)
     plt.legend(loc="upper right")
 
@@ -400,8 +410,6 @@ def plot_results(results):
 # ---------------------------- MAIN ----------------------------
 
 if __name__ == "__main__":
+    # res = simulate("16grid_diameter6test.edgelist")
     res = simulate("64grid_diameter14test.edgelist")
-    print("I collected", len(res), "data points")
-    df  = pd.DataFrame(res, columns=["Frac","ErrRate","Err","Str"])
-    print(df.head())
     plot_results(res)

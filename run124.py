@@ -310,7 +310,6 @@ def simulate(graph_file):
     G = load_graph(graph_file)
     size = int(math.sqrt(G.number_of_nodes()))
     H = build_mesh_hierarchy(size)
-    # In simulate(), after building H:
     print_clusters(H)
     leaders = assign_cluster_leaders(H)
 
@@ -324,30 +323,23 @@ def simulate(graph_file):
                 pred    = choose_Vp(G, frac)
                 act     = sample_Q_within_diameter(G, pred, error)
                 err     = calculate_error(pred, act, G)
-
-                # NEW: For each request in act, requester becomes new owner after request
                 for req in act:
                     if req == owner:
                         continue
                     stretch = measure_stretch([req], owner, leaders, G)
-                    # Optionally print per-request results here
-                    if error > 15:
-                        results.append((frac, 0, err, stretch))
-                    else:
-                        results.append((frac, 1/error, err, stretch))
-                    # Update owner and publish new downward links
+                    # Save the actual error value
+                    results.append((frac, error, err, stretch))
                     owner = req
                     publish(owner, leaders)
-
     return results
+
 
 # ---------------------------- PLOTTING ----------------------------
 
 def plot_results(results):
-    df  = pd.DataFrame(results, columns=["Frac","ErrRate","Err","Str"])
-    avg = df.groupby(["Frac","ErrRate"]).mean().reset_index()
+    df  = pd.DataFrame(results, columns=["Frac","Error","Err","Str"])
+    avg = df.groupby(["Frac","Error"]).mean().reset_index()
 
-    # use your global list here
     xvals = PREDICTION_FRACTIONS
 
     plt.figure(figsize=(12,6))
@@ -355,7 +347,7 @@ def plot_results(results):
     # ---------------- Error vs Fraction ----------------
     plt.subplot(1,2,1)
     for e in ERROR_VALUES_2:
-        sub = avg[ avg.ErrRate == e ]
+        sub = avg[ avg.Error == e ]
         plt.plot(sub.Frac, sub.Err, '-o', label=f"{e:.1f} Error")
     plt.title("Error vs Fraction of Predicted Nodes")
     plt.xlabel("Fraction of Predicted Nodes")
@@ -367,14 +359,9 @@ def plot_results(results):
 
     # ---------------- Stretch vs Fraction ----------------
     plt.subplot(1,2,2)
-    # for e in ERROR_VALUES_2:
-    #     sub = avg[ avg.ErrRate == e ]
-    #     plt.plot(sub.Frac, sub.Str, '-o', label=f"{e:.1f} Stretch")
-
-    for e, sub in avg.groupby("ErrRate"):
-        plt.plot(sub.Frac, sub.Str, '-o', label=f"{e:.1f} Stretch")
-
-
+    for e in ERROR_VALUES_2:
+        sub = avg[ avg.Error == e ]
+        plt.plot(sub.Frac, sub.Str, '-o', label=f"{e:.1f} Stretch")
     plt.title("Stretch vs Fraction of Predicted Nodes")
     plt.xlabel("Fraction of Predicted Nodes")
     plt.ylabel("Stretch")
@@ -385,6 +372,7 @@ def plot_results(results):
 
     plt.tight_layout()
     plt.show()
+
 
 
 # ---------------------------- MAIN ----------------------------
