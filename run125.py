@@ -11,7 +11,7 @@ import numpy as np
 PREDICTION_FRACTIONS = [0.03125, 0.0625, 0.125, 0.25, 0.5]
 ERROR_VALUES = [999999999999999999999999999999999999, 10, 5, 3.33333333333333333333333333, 2.5, 2]
 ERROR_VALUES_2       = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
-NUM_TRIALS           = 1
+NUM_TRIALS           = 20
 DEBUG                = True
 down_link = {}
 
@@ -400,7 +400,11 @@ def plot_results(results):
 # ---------------------------- MAIN ----------------------------
 
 if __name__ == "__main__":
-    res = simulate("64grid_diameter14test.edgelist")
+    # res = simulate("64grid_diameter14test.edgelist")
+    # res = simulate("144grid_diameter22test.edgelist")
+    # res = simulate("256grid_diameter30test.edgelist")
+    # res = simulate("576grid_diameter46test.edgelist")
+    res = simulate("1024grid_diameter62test.edgelist")
     print("I collected", len(res), "data points")
     df  = pd.DataFrame(res, columns=["Frac","ErrRate","Err","Str"])
     print(df.head())

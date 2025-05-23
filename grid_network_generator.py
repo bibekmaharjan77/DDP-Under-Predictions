@@ -6,7 +6,7 @@ from matplotlib import pyplot as plt
 import networkx as nx
 import random
 
-num_nodes = 16
+num_nodes = 576
 
 def add_edge_weights(graph):
     for e in graph.edges:
