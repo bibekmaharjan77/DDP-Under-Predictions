@@ -135,14 +135,15 @@ def simulate(G, cluster_leaders):
     results = []
     for error in ERROR_VALUES:
         for pf in PREDICTION_FRACTIONS:
+            correct_total = 0
+            total_queries = 0
+            stretches = []
+
             for _ in range(NUM_TRIALS):
                 Vp = choose_Vp(G, pf)
                 Q = sample_Q_within_diameter(G, Vp, error)
                 if not Q:
                     continue
-
-                correct = 0
-                stretches = []
 
                 for q in Q:
                     owner = random.choice(list(G.nodes()))
@@ -150,15 +151,15 @@ def simulate(G, cluster_leaders):
                     stretch = lookup(q, owner, cluster_leaders, G)
                     stretches.append(stretch)
                     if q in Vp:
-                        correct += 1
+                        correct_total += 1
+                total_queries += len(Q)
 
-                error_rate = round(1 - correct / len(Q), 2)
-                avg_stretch = sum(stretches) / len(stretches) if stretches else 1.0
-                results.append((pf, error, error_rate, avg_stretch))
+            error_rate = 1 - (correct_total / total_queries) if total_queries else 1.0
+            avg_stretch = sum(stretches) / len(stretches) if stretches else 1.0
+            results.append((pf, error, error_rate, avg_stretch))
 
     df = pd.DataFrame(results, columns=["predicted_fraction", "error_value", "error_rate", "stretch"])
     df = df[df["predicted_fraction"].isin(PREDICTION_FRACTIONS)]
-    df = df[df["error_value"].isin(ERROR_VALUES)]
     df.to_csv("spiral_results.csv", index=False)
     return df
 
@@ -166,33 +167,13 @@ def simulate(G, cluster_leaders):
 def plot_results(df):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
 
-    # Ensure fractions appear in consistent order
-    fractions = [0.0312, 0.0625, 0.125, 0.25, 0.5]
-    
     for error in ERROR_VALUES:
         subset = df[df["error_value"] == error]
-        
+        means = subset.groupby("predicted_fraction").agg({"error_rate": "mean", "stretch": "mean"})
+        means = means.reindex(PREDICTION_FRACTIONS)  # Ensure fixed x-axis order
+        ax1.plot(PREDICTION_FRACTIONS, means["error_rate"], marker='o', label=f"{error:.1f}")
+        ax2.plot(PREDICTION_FRACTIONS, means["stretch"], marker='x', label=f"{error:.1f}")
 
-        grouped = subset.groupby("predicted_fraction")
-        error_vals = grouped["error_rate"].max().reindex(PREDICTION_FRACTIONS)
-        stretch_vals = grouped["stretch"].mean().reindex(PREDICTION_FRACTIONS)
-        ax1.plot(PREDICTION_FRACTIONS, error_vals, marker='o', label=f"{error:.1f}")
-        ax2.plot(PREDICTION_FRACTIONS, stretch_vals, marker='x', label=f"{error:.1f}")
-
-
-        means = means.reindex(fractions)  # Fix order
-
-        ax1.plot(fractions, means["error_rate"], marker='o', label=f"{error:.1f}")
-        ax2.plot(fractions, means["stretch"], marker='x', label=f"{error:.1f}")
-
-    # Set proper ticks and labels for x-axis
-    x_labels = ['0.0312', '0.0625', '0.1250', '0.2500', '0.5000']
-    ax1.set_xticks(fractions)
-    ax1.set_xticklabels(x_labels)
-    ax2.set_xticks(fractions)
-    ax2.set_xticklabels(x_labels)
-
-    # Set axis titles and legends
     ax1.set_title("Error vs Fraction of Predicted Nodes")
     ax1.set_xlabel("Fraction of Predicted Nodes")
     ax1.set_ylabel("Error (Max)")
@@ -207,7 +188,6 @@ def plot_results(df):
 
     plt.tight_layout()
     plt.show()
-
 
 # -------------------- Graph Loader --------------------
 def load_graph(filename):

@@ -28,12 +28,6 @@ def sample_Q_within_diameter(G, Vp, error_fraction):
             Q.append(random.choice(list(reach.keys())))
     return Q
 
-def count_duplicates(lst):
-    counts = defaultdict(int)
-    for item in lst:
-        counts[item] += 1
-    return {k: v for k, v in counts.items() if v > 1}
-
 # -------------------- Spiral Cluster Construction --------------------
 def build_sparse_cover(G, beta=2):
     if not nx.is_connected(G):
@@ -62,19 +56,12 @@ def build_sparse_cover(G, beta=2):
 
 # -------------------- Assign Leaders to Clusters --------------------
 def assign_cluster_leaders(cluster_hierarchy):
-    cluster_leaders = defaultdict(dict)  # level -> node -> leader
+    cluster_leaders = defaultdict(dict)
     for level, clusters in enumerate(cluster_hierarchy):
         for leader, cluster in clusters:
             for node in cluster:
                 cluster_leaders[level][node] = leader
     return cluster_leaders
-
-# -------------------- Print Clusters --------------------
-def print_clusters(cluster_hierarchy):
-    for level, clusters in enumerate(cluster_hierarchy):
-        print(f"Level {level} has {len(clusters)} clusters:")
-        for i, (leader, members) in enumerate(clusters):
-            print(f"  Cluster {i}: Leader={leader}, Size={len(members)}")
 
 # -------------------- Spiral Path Construction --------------------
 def get_spiral_path(node, cluster_leaders):
@@ -143,7 +130,6 @@ def simulate(G, cluster_leaders):
 
                 correct = 0
                 stretches = []
-
                 for q in Q:
                     owner = random.choice(list(G.nodes()))
                     publish(owner, cluster_leaders)
@@ -152,13 +138,13 @@ def simulate(G, cluster_leaders):
                     if q in Vp:
                         correct += 1
 
-                error_rate = round(1 - correct / len(Q), 2)
+                error_rate = 1 - (correct / len(Q)) if len(Q) > 0 else 1.0
                 avg_stretch = sum(stretches) / len(stretches) if stretches else 1.0
+
                 results.append((pf, error, error_rate, avg_stretch))
 
     df = pd.DataFrame(results, columns=["predicted_fraction", "error_value", "error_rate", "stretch"])
     df = df[df["predicted_fraction"].isin(PREDICTION_FRACTIONS)]
-    df = df[df["error_value"].isin(ERROR_VALUES)]
     df.to_csv("spiral_results.csv", index=False)
     return df
 
@@ -166,33 +152,14 @@ def simulate(G, cluster_leaders):
 def plot_results(df):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
 
-    # Ensure fractions appear in consistent order
-    fractions = [0.0312, 0.0625, 0.125, 0.25, 0.5]
-    
+    grouped = df.groupby(['error_value', 'predicted_fraction'])
+    error_vals = grouped["error_rate"].max().unstack()
+    stretch_vals = grouped["stretch"].mean().unstack()
+
     for error in ERROR_VALUES:
-        subset = df[df["error_value"] == error]
-        
+        ax1.plot(PREDICTION_FRACTIONS, error_vals.loc[error], marker='o', label=f"{error:.1f}")
+        ax2.plot(PREDICTION_FRACTIONS, stretch_vals.loc[error], marker='x', label=f"{error:.1f}")
 
-        grouped = subset.groupby("predicted_fraction")
-        error_vals = grouped["error_rate"].max().reindex(PREDICTION_FRACTIONS)
-        stretch_vals = grouped["stretch"].mean().reindex(PREDICTION_FRACTIONS)
-        ax1.plot(PREDICTION_FRACTIONS, error_vals, marker='o', label=f"{error:.1f}")
-        ax2.plot(PREDICTION_FRACTIONS, stretch_vals, marker='x', label=f"{error:.1f}")
-
-
-        means = means.reindex(fractions)  # Fix order
-
-        ax1.plot(fractions, means["error_rate"], marker='o', label=f"{error:.1f}")
-        ax2.plot(fractions, means["stretch"], marker='x', label=f"{error:.1f}")
-
-    # Set proper ticks and labels for x-axis
-    x_labels = ['0.0312', '0.0625', '0.1250', '0.2500', '0.5000']
-    ax1.set_xticks(fractions)
-    ax1.set_xticklabels(x_labels)
-    ax2.set_xticks(fractions)
-    ax2.set_xticklabels(x_labels)
-
-    # Set axis titles and legends
     ax1.set_title("Error vs Fraction of Predicted Nodes")
     ax1.set_xlabel("Fraction of Predicted Nodes")
     ax1.set_ylabel("Error (Max)")
@@ -208,7 +175,6 @@ def plot_results(df):
     plt.tight_layout()
     plt.show()
 
-
 # -------------------- Graph Loader --------------------
 def load_graph(filename):
     path = os.path.join("graphs", "random", filename)
@@ -222,7 +188,6 @@ if __name__ == "__main__":
     fname = "64random_diameter38test.edgelist"
     G = load_graph(fname)
     clusters = build_sparse_cover(G)
-    print_clusters(clusters)
     cluster_leaders = assign_cluster_leaders(clusters)
     df = simulate(G, cluster_leaders)
     plot_results(df)

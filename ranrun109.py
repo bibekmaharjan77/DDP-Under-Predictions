@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from collections import defaultdict, deque
 
 # -------------------- Parameters --------------------
-NUM_TRIALS = 50
+NUM_TRIALS = 100
 PREDICTION_FRACTIONS = [0.0312, 0.0625, 0.125, 0.25, 0.5]
 ERROR_VALUES = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
 
@@ -152,13 +152,12 @@ def simulate(G, cluster_leaders):
                     if q in Vp:
                         correct += 1
 
-                error_rate = round(1 - correct / len(Q), 2)
+                error_rate = 1 - correct / len(Q)
                 avg_stretch = sum(stretches) / len(stretches) if stretches else 1.0
                 results.append((pf, error, error_rate, avg_stretch))
 
     df = pd.DataFrame(results, columns=["predicted_fraction", "error_value", "error_rate", "stretch"])
     df = df[df["predicted_fraction"].isin(PREDICTION_FRACTIONS)]
-    df = df[df["error_value"].isin(ERROR_VALUES)]
     df.to_csv("spiral_results.csv", index=False)
     return df
 
@@ -166,33 +165,23 @@ def simulate(G, cluster_leaders):
 def plot_results(df):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
 
-    # Ensure fractions appear in consistent order
-    fractions = [0.0312, 0.0625, 0.125, 0.25, 0.5]
-    
     for error in ERROR_VALUES:
         subset = df[df["error_value"] == error]
-        
-
         grouped = subset.groupby("predicted_fraction")
         error_vals = grouped["error_rate"].max().reindex(PREDICTION_FRACTIONS)
         stretch_vals = grouped["stretch"].mean().reindex(PREDICTION_FRACTIONS)
-        ax1.plot(PREDICTION_FRACTIONS, error_vals, marker='o', label=f"{error:.1f}")
-        ax2.plot(PREDICTION_FRACTIONS, stretch_vals, marker='x', label=f"{error:.1f}")
+
+    ax1.plot(PREDICTION_FRACTIONS, error_vals, marker='o', label=f"{error:.1f}")
+    ax2.plot(PREDICTION_FRACTIONS, stretch_vals, marker='x', label=f"{error:.1f}")
 
 
-        means = means.reindex(fractions)  # Fix order
-
-        ax1.plot(fractions, means["error_rate"], marker='o', label=f"{error:.1f}")
-        ax2.plot(fractions, means["stretch"], marker='x', label=f"{error:.1f}")
-
-    # Set proper ticks and labels for x-axis
+    # Custom x-axis labels
     x_labels = ['0.0312', '0.0625', '0.1250', '0.2500', '0.5000']
-    ax1.set_xticks(fractions)
+    ax1.set_xticks(PREDICTION_FRACTIONS)
     ax1.set_xticklabels(x_labels)
-    ax2.set_xticks(fractions)
+    ax2.set_xticks(PREDICTION_FRACTIONS)
     ax2.set_xticklabels(x_labels)
 
-    # Set axis titles and legends
     ax1.set_title("Error vs Fraction of Predicted Nodes")
     ax1.set_xlabel("Fraction of Predicted Nodes")
     ax1.set_ylabel("Error (Max)")
