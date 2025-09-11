@@ -465,6 +465,133 @@ def plot_results(results):
     plt.tight_layout()
     plt.show()
 
+# ---------------------------- HALVING MODE ADD-ONS ----------------------------
+
+def halving_counts(n: int):
+    """Return [n/2, n/4, ..., 1] using integer division."""
+    counts = []
+    k = n // 2
+    while k >= 1:
+        counts.append(k)
+        k //= 2
+    return counts
+
+def choose_Vp_halving(G, k: int):
+    """
+    Halving-mode version of choose_Vp. Intentionally mirrors the original:
+    - uses random.choices (with replacement)
+    - dedups to build reduced_Vp
+    - selects an owner not in reduced_Vp and inserts it (for parity with original)
+    - returns *original_Vp* (same as your original choose_Vp)
+    """
+    G = nx.relabel_nodes(G, lambda x: int(x))
+    nodes = list(G.nodes())
+    random.shuffle(nodes)  # Shuffle for randomness
+    total_nodes = len(nodes)
+
+    # mirror the original: clamp to [1, n] and use as-is
+    vp_size = int(k)
+    vp_size = max(1, min(vp_size, total_nodes))
+
+    # with replacement (exactly like your original)
+    original_Vp = list(random.choices(nodes, k=vp_size))
+    random.shuffle(original_Vp)
+
+    # build reduced_Vp & owner (same as original structure)
+    reduced_Vp = set(original_Vp)
+    reduced_Vp = list(reduced_Vp)
+    random.shuffle(reduced_Vp)
+
+    remaining = set(nodes) - set(reduced_Vp)
+    owner = random.choice(list(remaining)) if remaining else random.choice(nodes)
+
+    insert_position = random.randint(0, len(reduced_Vp))
+    reduced_Vp.insert(insert_position, owner)
+    S = set(reduced_Vp)  # kept for parity; not returned/used (same as original)
+
+    # IMPORTANT: return signature matches your original choose_Vp
+    return original_Vp
+
+
+def simulate_halving(graph_file):
+    """
+    Same outputs as simulate(): list of (Frac, ErrRate, Err, Str).
+    Only difference: |P| runs over {n/2, n/4, ..., 1}, with Frac = k/n.
+    """
+    G = load_graph(graph_file)
+    n = G.number_of_nodes()
+    size = int(math.sqrt(n))
+    H = build_mesh_hierarchy(size)
+    print_clusters(H)
+    leaders = assign_cluster_leaders(H)
+
+    k_values = halving_counts(n)
+    results = []
+
+    for error in ERROR_VALUES:
+        for k in k_values:
+            frac = k / n  # so plots are still vs fraction
+
+            # reset ownership for this bucket
+            owner = random.choice(list(G.nodes()))
+            publish(owner, leaders)
+
+            for _ in range(NUM_TRIALS):
+                P = choose_Vp_halving(G, k)              # <- mirrors original choose_Vp
+                Q = sample_Q_within_diameter(G, P, error)  # |Q| == |P|
+                err = calculate_error(P, Q, G)
+
+                for req in Q:
+                    if req == owner:
+                        continue
+                    stretch = measure_stretch([req], owner, leaders, G, trace=False)
+
+                    err_rate = 0.0 if error > 15 else round(1.0 / error, 1)
+                    results.append((frac, err_rate, err, stretch))
+
+                    owner = req
+                    publish(owner, leaders)
+
+    return results
+
+
+def plot_results_halving(results):
+    df  = pd.DataFrame(results, columns=["Frac","ErrRate","Err","Str"])
+    avg = df.groupby(["Frac","ErrRate"]).mean().reset_index()
+
+    xvals = sorted(df["Frac"].unique(), reverse=True)
+
+    plt.figure(figsize=(12,6))
+
+    # ---------------- Error vs Fraction ----------------
+    plt.subplot(1,2,1)
+    for e in ERROR_VALUES_2:
+        sub = avg[ avg.ErrRate == e ].sort_values("Frac", ascending=False)
+        plt.plot(sub.Frac, sub.Err, '-o', label=f"{e:.1f} Error")
+    plt.title("Error vs Fraction of Predicted Nodes (halving mode)")
+    plt.xlabel("Fraction |P| / |V|")
+    plt.ylabel("Error (Max)")
+    plt.xticks(xvals, [f"{f:.6f}".rstrip('0').rstrip('.') for f in xvals], rotation=45)
+    plt.ylim(0, max(ERROR_VALUES_2)*1.1)
+    plt.grid(True)
+    plt.legend(loc="upper right")
+
+    # ---------------- Stretch vs Fraction ----------------
+    plt.subplot(1,2,2)
+    for err_rate, group in avg.groupby("ErrRate"):
+        sub = group.sort_values("Frac", ascending=False)
+        plt.plot(sub.Frac, sub.Str, "-o", label=f"{err_rate:.1f} Stretch")
+
+    plt.title("Stretch vs Fraction of Predicted Nodes (halving mode)")
+    plt.xlabel("Fraction |P| / |V|")
+    plt.ylabel("Stretch")
+    plt.xticks(xvals, [f"{f:.6f}".rstrip('0').rstrip('.') for f in xvals], rotation=45)
+    plt.grid(True)
+    plt.legend(loc="upper right")
+
+    plt.tight_layout()
+    plt.show()
+
 
 # ---------------------------- MAIN ----------------------------
 
@@ -474,7 +601,14 @@ if __name__ == "__main__":
     res = simulate("256grid_diameter30test.edgelist")
     # res = simulate("576grid_diameter46test.edgelist")
     # res = simulate("1024grid_diameter62test.edgelist")
-    print("I collected", len(res), "data points")
-    df  = pd.DataFrame(res, columns=["Frac","ErrRate","Err","Str"])
+    # print("I collected", len(res), "data points")
+    # df  = pd.DataFrame(res, columns=["Frac","ErrRate","Err","Str"])
+    # print(df.head())
+    # plot_results(res)
+
+    # ===== Halving mode (new flow) =====
+    res_half = simulate_halving("256grid_diameter30test.edgelist")
+    print("Halving mode collected", len(res_half), "points")
+    df  = pd.DataFrame(res_half, columns=["Frac","ErrRate","Err","Str"])
     print(df.head())
-    plot_results(res)
+    plot_results_halving(res_half)
