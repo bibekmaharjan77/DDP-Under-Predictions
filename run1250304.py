@@ -594,12 +594,182 @@ def plot_results_halving_counts(results, n=None, title_suffix=" (halving mode)",
 
     plt.show()
 
+# -----halving mode add ons complete-------------------------------
 
+
+# ---------multibend comparison add-ons----------------------------
+def multibend_move_sequence_stretch(requesters, owner, leader_map, G, weight=None, trace=False):
+    """
+    MultiBend *move* stretch for a requester sequence.
+    Algorithm cost per request = UP + DOWN + (owner -> requester shortest path).
+    OPT lower bound per request = (owner -> requester shortest path).
+    Returns (sum alg costs) / (sum OPT costs).
+    """
+    total_alg = 0
+    total_opt = 0
+
+    for r in requesters:
+        if r == owner:
+            continue
+
+        # publish at current owner (directory path)
+        publish(owner, leader_map)
+
+        # ----- UP: climb r's spiral until it hits the published path
+        sp = get_spiral(r, leader_map)
+        up_hops = 0
+        intersection = None
+        for i in range(len(sp) - 1):
+            u, v = sp[i], sp[i+1]
+            d = nx.shortest_path_length(G, u, v, weight=weight)
+            up_hops += d
+            if v in down_link:
+                intersection = v
+                break
+        if intersection is None:
+            intersection = sp[-1]
+
+        # ----- DOWN: follow directory pointers (fallback = direct)
+        down_hops = 0
+        cur = intersection
+        seen = {cur}
+        while cur != owner:
+            nxt = down_link.get(cur)
+            if nxt is None or nxt in seen:
+                down_hops += nx.shortest_path_length(G, cur, owner, weight=weight)
+                break
+            down_hops += nx.shortest_path_length(G, cur, nxt, weight=weight)
+            seen.add(nxt)
+            cur = nxt
+
+        # ----- object forwarding hop
+        obj = nx.shortest_path_length(G, owner, r, weight=weight)
+
+        total_alg += (up_hops + down_hops + obj)
+        total_opt += obj
+
+        if trace:
+            print(f"[MB seq] r={r} up={up_hops} down={down_hops} obj={obj} "
+                  f"⇒ {(up_hops+down_hops+obj)/obj:.3f}")
+
+        # move object to r and continue
+        owner = r
+
+    return (total_alg / total_opt) if total_opt > 0 else 1.0
+
+
+
+def simulate_halving_compare_multibend(graph_file):
+    """
+    Returns rows: (Frac, ErrRate, Err, OurStr, MBStr).
+    Uses your halving counts. For each request in Q, we compute:
+      - OurStr:   your current up+down stretch (single request)
+      - MBStr:    MultiBend move stretch for that single step = 1 + (up+down)/obj
+    """
+    G = load_graph(graph_file)
+    n = G.number_of_nodes()
+    size = int(math.sqrt(n))
+    H = build_mesh_hierarchy(size)
+    print_clusters(H)
+    leaders = assign_cluster_leaders(H)
+
+    k_values = halving_counts(n)
+    results = []
+
+    for error in ERROR_VALUES:
+        for k in k_values:
+            frac = k / n
+            owner = random.choice(list(G.nodes()))
+            publish(owner, leaders)
+
+            for _ in range(NUM_TRIALS):
+                P = choose_Vp_halving(G, k)
+                Q = sample_Q_within_diameter(G, P, error)
+                err = calculate_error(P, Q, G)
+
+                for req in Q:
+                    if req == owner:
+                        continue
+
+                    # our (lookup-style) stretch for this single request
+                    our_str = measure_stretch([req], owner, leaders, G, trace=False)
+
+                    # MB move-stretch for this single step
+                    mb_str = multibend_move_sequence_stretch([req], owner, leaders, G)
+
+                    err_rate = 0.0 if error > 15 else round(1.0 / error, 1)
+                    results.append((frac, err_rate, err, our_str, mb_str))
+
+                    owner = req
+                    publish(owner, leaders)
+
+    return results
+
+
+
+def plot_mb_vs_ours_per_error(results, n, err_levels=None, use_log_x=False, save=False, prefix="mb_vs_ours"):
+    """
+    Makes 1x2 figures like your reference image, one figure per error cutoff.
+    Left:  Error vs |P| (halving)
+    Right: Our stretch vs MultiBend move stretch
+    """
+    if err_levels is None:
+        err_levels = ERROR_VALUES_2
+
+    df = pd.DataFrame(results, columns=["Frac","ErrRate","Err","OurStr","MBStr"])
+    df["Count"] = (df["Frac"] * n).round().astype(int)
+
+    for e in err_levels:
+        sub = df[df.ErrRate == e].copy()
+        if sub.empty:
+            continue
+        avg = sub.groupby("Count").mean().reset_index().sort_values("Count")
+        xvals = avg["Count"].tolist()
+
+        fig, axes = plt.subplots(1, 2, figsize=(12, 6), constrained_layout=True)
+
+        # -------- Left: Error vs |P| --------
+        ax = axes[0]
+        ax.plot(avg["Count"], avg["Err"], "-o", label=f"Prediction Error ≤ {e:.1f}")
+        ax.set_title("Error vs Fraction of Predicted Nodes")
+        ax.set_ylabel("Average of Max Error")
+        ax.set_xlabel(f"Number of predicted nodes among {n} nodes (# of operations)")
+        if use_log_x:
+            try: ax.set_xscale("log", base=2)
+            except TypeError: ax.set_xscale("log", basex=2)
+        ax.set_xticks(xvals)
+        ax.grid(True, axis="y", alpha=0.35)
+        ax.legend(loc="upper left")
+
+        # -------- Right: Stretch comparison --------
+        ax = axes[1]
+        ax.plot(avg["Count"], avg["OurStr"], "-o", label=f"Our Stretch ≤ {e:.1f}")
+        ax.plot(avg["Count"], avg["MBStr"], "-o", label=f"MultiBend Stretch ≤ {e:.1f}")
+        ax.set_title("Our Stretch vs Multibend Stretch")
+        ax.set_ylabel("PA rrow Stretch" if e == 0.0 else "Stretch")
+        ax.set_xlabel(f"Number of predicted nodes among {n} nodes (# of operations)")
+        if use_log_x:
+            try: ax.set_xscale("log", base=2)
+            except TypeError: ax.set_xscale("log", basex=2)
+        ax.set_xticks(xvals)
+        ax.grid(True, axis="y", alpha=0.35)
+        ax.legend(loc="best")
+
+        if save:
+            out = f"{prefix}_err_{str(e).replace('.','p')}.png"
+            plt.savefig(out, dpi=180)
+            print("saved:", out)
+        else:
+            plt.show()
+
+
+# ---------multibend comparison add-ons complete----------------------------
 
 
 # ---------------------------- MAIN ----------------------------
 
 if __name__ == "__main__":
+    # old flow
     # res = simulate("64grid_diameter14test.edgelist")
     # res = simulate("144grid_diameter22test.edgelist")
     # res = simulate("256grid_diameter30test.edgelist")
@@ -610,11 +780,20 @@ if __name__ == "__main__":
     # print(df.head())
     # plot_results(res)
 
-    # ===== Halving mode (new flow) =====
+    # ===== Halving mode flow =====
     # res_half = simulate_halving("256grid_diameter30test.edgelist")
-    res_half = simulate_halving("576grid_diameter46test.edgelist")
-    print("Halving mode collected", len(res_half), "points")
-    df  = pd.DataFrame(res_half, columns=["Frac","ErrRate","Err","Str"])
-    print(df.head())
-    # plot_results_halving_counts(res_half, n=576, use_log_x=False)
-    plot_results_halving_counts(res_half, n=576)
+    # res_half = simulate_halving("576grid_diameter46test.edgelist")
+    # print("Halving mode collected", len(res_half), "points")
+    # df  = pd.DataFrame(res_half, columns=["Frac","ErrRate","Err","Str"])
+    # print(df.head())
+    # # plot_results_halving_counts(res_half, n=576, use_log_x=False)
+    # plot_results_halving_counts(res_half, n=576)
+
+
+    # ===== Halving + MultiBend comparison (new flow) =====
+    # 1) generate comparison results on the same sequences
+    res_cmp = simulate_halving_compare_multibend("256grid_diameter30test.edgelist")
+
+    # 2) make five figures (one per error cutoff).  Set use_log_x=True if you prefer log2 spacing.
+    plot_mb_vs_ours_per_error(res_cmp, n=256, use_log_x=True)
+
