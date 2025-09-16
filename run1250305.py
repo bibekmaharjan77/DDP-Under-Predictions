@@ -157,91 +157,92 @@ def publish(owner, leader_map):
 
 # ---------------------------- STRETCH MEASUREMENT ----------------------------
 
+
+def _single_request_costs(r, owner, leader_map, G, weight=None, trace=False):
+    """
+    Return (up_hops, down_hops, obj) for a single request r given current owner.
+    obj is the shortest-path distance from owner -> r.
+    """
+    # publish at the current owner
+    publish(owner, leader_map)
+
+    # ---- UP: climb r's spiral until it hits a published pointer
+    sp = get_spiral(r, leader_map)
+    up_hops = 0
+    intersection = None
+    for i in range(len(sp) - 1):
+        u, v = sp[i], sp[i+1]
+        d = nx.shortest_path_length(G, u, v, weight=weight)
+        up_hops += d
+        if v in down_link:
+            intersection = v
+            break
+    if intersection is None:
+        intersection = sp[-1]  # root leader
+
+    # ---- DOWN: follow pointers; if missing, jump directly to owner
+    down_hops = 0
+    cur = intersection
+    seen = {cur}
+    while cur != owner:
+        nxt = down_link.get(cur)
+        if nxt is None or nxt in seen:
+            down_hops += nx.shortest_path_length(G, cur, owner, weight=weight)
+            break
+        down_hops += nx.shortest_path_length(G, cur, nxt, weight=weight)
+        seen.add(nxt)
+        cur = nxt
+
+    # ---- object forwarding hop
+    obj = nx.shortest_path_length(G, owner, r, weight=weight)
+
+    if trace:
+        print(f"[costs] r={r} up={up_hops} down={down_hops} obj={obj}")
+
+    return up_hops, down_hops, obj
+
+
+
 def measure_stretch(requesters, owner, leader_map, G, weight=None, trace=True):
     """
-    Compute average stretch over `requesters` w.r.t. current `owner`.
-    - weight: pass "weight" if the graph has weighted edges; default None (unweighted).
-    - trace:  print per-segment costs for UP (spiral climb) and DOWN (pointer chain).
+    LOOKUP stretch (your current metric):
+      sum(UP+DOWN) / sum(OPT), where OPT = shortest(owner, requester).
+    Kept for backward compatibility.
     """
-    global down_link
     total_up_down = 0
     total_opt     = 0
 
     for r in requesters:
         if r == owner:
             continue
-
-        # 1) Upward climb along the spiral until we meet the published path
-        sp = get_spiral(r, leader_map)
-        up_segments = []
-        up_hops = 0
-        intersection = None
-
-        if trace:
-            print(f"\nRequester {r}:")
-            print(f"  Spiral: {sp}")
-
-        for i in range(len(sp) - 1):
-            u, v = sp[i], sp[i+1]
-            d = nx.shortest_path_length(G, u, v, weight=weight)
-            up_segments.append((u, v, d))
-            up_hops += d
-            if v in down_link:
-                intersection = v
-                break
-
-        if intersection is None:
-            intersection = sp[-1]  # root leader
-
-        if trace:
-            print("  Upward segments:")
-            for u, v, d in up_segments:
-                print(f"    {u} -> {v} = {d}")
-            print(f"  Intersection at: {intersection}")
-
-        # 2) Downward: follow published pointers; if missing, jump directly
-        down_segments = []
-        down_hops = 0
-        cur = intersection
-        seen = {cur}
-        while cur != owner:
-            nxt = down_link.get(cur)
-            if nxt is None or nxt in seen:
-                d = nx.shortest_path_length(G, cur, owner, weight=weight)
-                down_segments.append((cur, owner, d, "DIRECT"))
-                down_hops += d
-                break
-            d = nx.shortest_path_length(G, cur, nxt, weight=weight)
-            down_segments.append((cur, nxt, d, "POINTER"))
-            down_hops += d
-            seen.add(nxt)
-            cur = nxt
-
-        if trace:
-            print("  Downward segments:")
-            for u, v, d, kind in down_segments:
-                extra = " [DIRECT]" if kind == "DIRECT" else ""
-                print(f"    {u} -> {v} = {d}{extra}")
-
-        dist_sp  = up_hops + down_hops
-        dist_opt = nx.shortest_path_length(G, r, owner, weight=weight)
-        stretch  = dist_sp / dist_opt if dist_opt > 0 else 1.0
-
-        if trace:
-            print(f"  Up hops: {up_hops}")
-            print(f"  Down hops: {down_hops}")
-            print(f"  Total hops: {dist_sp}")
-            print(f"  Shortest path (opt): {dist_opt}")
-            print(f"  Stretch: {stretch:.3f}")
-
-        total_up_down += dist_sp
-        total_opt     += dist_opt
-
-        # Move ownership and republish for the next requester
-        owner = r
+        up, down, obj = _single_request_costs(r, owner, leader_map, G, weight, trace and DEBUG)
+        total_up_down += (up + down)
+        total_opt     += obj
+        owner = r  # move ownership for next step (your model does this)
         publish(owner, leader_map)
 
     return (total_up_down / total_opt) if total_opt > 0 else 1.0
+
+
+
+def measure_stretch_move(requesters, owner, leader_map, G, weight=None, trace=True):
+    """
+    MOVE stretch (what MultiBend reports):
+      sum(UP + DOWN + OBJ) / sum(OBJ)  ==  1 + sum(UP+DOWN)/sum(OBJ)
+    """
+    total_alg = 0
+    total_opt = 0
+
+    for r in requesters:
+        if r == owner:
+            continue
+        up, down, obj = _single_request_costs(r, owner, leader_map, G, weight, trace and DEBUG)
+        total_alg += (up + down + obj)
+        total_opt += obj
+        owner = r
+        publish(owner, leader_map)
+
+    return (total_alg / total_opt) if total_opt > 0 else 1.0
 
 
 
@@ -352,40 +353,35 @@ def calculate_error(Vp, Q, G_example):
 
 # ---------------------------- SIMULATION ----------------------------
 
-def simulate(graph_file):
+def simulate(graph_file, use_move_stretch=False):
     G = load_graph(graph_file)
     size = int(math.sqrt(G.number_of_nodes()))
     H = build_mesh_hierarchy(size)
     print_clusters(H)
     leaders = assign_cluster_leaders(H)
 
+    measure_fn = measure_stretch_move if use_move_stretch else measure_stretch
     results = []
     for error in ERROR_VALUES:
-      for frac in PREDICTION_FRACTIONS:
-        # ←– ADD THESE TWO LINES HERE
-        owner = random.choice(list(G.nodes()))
-        publish(owner, leaders)
-
-        for _ in range(NUM_TRIALS):
-          pred = choose_Vp(G, frac)
-          act  = sample_Q_within_diameter(G, pred, error)
-          err  = calculate_error(pred, act, G)
-
-          for req in act:
-            if req == owner: 
-              continue
-            stretch = measure_stretch([req], owner, leaders, G)
-
-            if error > 15:
-              err_rate = 0.0
-            else:
-              err_rate = round(1.0 / error, 1)
-
-            results.append((frac, err_rate, err, stretch))
-
-            owner = req
+        for frac in PREDICTION_FRACTIONS:
+            owner = random.choice(list(G.nodes()))
             publish(owner, leaders)
 
+            for _ in range(NUM_TRIALS):
+                pred = choose_Vp(G, frac)
+                act  = sample_Q_within_diameter(G, pred, error)
+                err  = calculate_error(pred, act, G)
+
+                for req in act:
+                    if req == owner:
+                        continue
+                    stretch = measure_fn([req], owner, leaders, G, trace=False)
+
+                    err_rate = 0.0 if error > 15 else round(1.0 / error, 1)
+                    results.append((frac, err_rate, err, stretch))
+
+                    owner = req
+                    publish(owner, leaders)
     return results
 
 
@@ -491,11 +487,7 @@ def choose_Vp_halving(G, k: int):
     return original_Vp
 
 
-def simulate_halving(graph_file):
-    """
-    Same outputs as simulate(): list of (Frac, ErrRate, Err, Str).
-    Only difference: |P| runs over {n/2, n/4, ..., 1}, with Frac = k/n.
-    """
+def simulate_halving(graph_file, use_move_stretch=False):
     G = load_graph(graph_file)
     n = G.number_of_nodes()
     size = int(math.sqrt(n))
@@ -503,33 +495,29 @@ def simulate_halving(graph_file):
     print_clusters(H)
     leaders = assign_cluster_leaders(H)
 
+    measure_fn = measure_stretch_move if use_move_stretch else measure_stretch
     k_values = halving_counts(n)
     results = []
 
     for error in ERROR_VALUES:
         for k in k_values:
-            frac = k / n  # so plots are still vs fraction
-
-            # reset ownership for this bucket
+            frac = k / n
             owner = random.choice(list(G.nodes()))
             publish(owner, leaders)
 
             for _ in range(NUM_TRIALS):
-                P = choose_Vp_halving(G, k)              # <- mirrors original choose_Vp
-                Q = sample_Q_within_diameter(G, P, error)  # |Q| == |P|
+                P = choose_Vp_halving(G, k)
+                Q = sample_Q_within_diameter(G, P, error)
                 err = calculate_error(P, Q, G)
 
                 for req in Q:
                     if req == owner:
                         continue
-                    stretch = measure_stretch([req], owner, leaders, G, trace=False)
-
+                    stretch = measure_fn([req], owner, leaders, G, trace=False)
                     err_rate = 0.0 if error > 15 else round(1.0 / error, 1)
                     results.append((frac, err_rate, err, stretch))
-
                     owner = req
                     publish(owner, leaders)
-
     return results
 
 
@@ -692,7 +680,7 @@ def simulate_halving_compare_multibend(graph_file):
                         continue
 
                     # our (lookup-style) stretch for this single request
-                    our_str = measure_stretch([req], owner, leaders, G, trace=False)
+                    our_str = measure_stretch_move([req], owner, leaders, G, trace=False)
 
                     # MB move-stretch for this single step
                     mb_str = multibend_move_sequence_stretch([req], owner, leaders, G)
@@ -770,19 +758,19 @@ def plot_mb_vs_ours_per_error(results, n, err_levels=None, use_log_x=False, save
 
 if __name__ == "__main__":
     # old flow
-    # res = simulate("64grid_diameter14test.edgelist")
-    # res = simulate("144grid_diameter22test.edgelist")
-    # res = simulate("256grid_diameter30test.edgelist")
-    # res = simulate("576grid_diameter46test.edgelist")
-    # res = simulate("1024grid_diameter62test.edgelist")
+    # res = simulate("64grid_diameter14test.edgelist", use_move_stretch=True)
+    # res = simulate("144grid_diameter22test.edgelist", use_move_stretch=True)
+    # res = simulate("256grid_diameter30test.edgelist", use_move_stretch=True)
+    # res = simulate("576grid_diameter46test.edgelist", use_move_stretch=True)
+    # res = simulate("1024grid_diameter62test.edgelist", use_move_stretch=True)
     # print("I collected", len(res), "data points")
     # df  = pd.DataFrame(res, columns=["Frac","ErrRate","Err","Str"])
     # print(df.head())
     # plot_results(res)
 
     # ===== Halving mode flow =====
-    # res_half = simulate_halving("256grid_diameter30test.edgelist")
-    # res_half = simulate_halving("576grid_diameter46test.edgelist")
+    # res_half = simulate_halving("256grid_diameter30test.edgelist", use_move_stretch=True)
+    # res_half = simulate_halving("576grid_diameter46test.edgelist", use_move_stretch=True)
     # print("Halving mode collected", len(res_half), "points")
     # df  = pd.DataFrame(res_half, columns=["Frac","ErrRate","Err","Str"])
     # print(df.head())
