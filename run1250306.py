@@ -731,18 +731,24 @@ def plot_mb_vs_ours_per_error(results, n, err_levels=None, use_log_x=False, save
         ax.legend(loc="upper left")
 
         # -------- Right: Stretch comparison --------
+        
         ax = axes[1]
-        ax.plot(avg["Count"], avg["OurStr"], "-o", label=f"Our Stretch ≤ {e:.1f}")
-        ax.plot(avg["Count"], avg["MBStr"], "-o", label=f"MultiBend Stretch ≤ {e:.1f}")
+        x = avg["Count"].to_numpy(dtype=float)
+
+        # small horizontal jitter so overlapping lines are visible on log2 axis
+        ax.plot(x*0.985, avg["OurStr"], "-o", label=f"Our Stretch ≤ {e:.1f}", zorder=3)
+        ax.plot(x*1.015, avg["MBStr"], "--s", label=f"MultiBend Stretch ≤ {e:.1f}", alpha=0.85, zorder=2)
+
         ax.set_title("Our Stretch vs Multibend Stretch")
         ax.set_ylabel("PA rrow Stretch" if e == 0.0 else "Stretch")
         ax.set_xlabel(f"Number of predicted nodes among {n} nodes")
         if use_log_x:
             try: ax.set_xscale("log", base=2)
             except TypeError: ax.set_xscale("log", basex=2)
-        ax.set_xticks(xvals)
+        ax.set_xticks(x)
         ax.grid(True, axis="y", alpha=0.35)
         ax.legend(loc="best")
+
 
         if save:
             out = f"{prefix}_err_{str(e).replace('.','p')}.png"
