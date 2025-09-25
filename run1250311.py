@@ -869,7 +869,7 @@ def plot_mb_vs_ours_from_excel(filename, use_avg=True, err_levels=None,
         ax = axes[0]
         ax.plot(xvals, avg[error_metric], "-o", label=f"ErrRate ≤ {e:.1f}")
         ax.set_title("Error vs Fraction of Predicted Nodes")
-        ax.set_ylabel(error_metric)
+        ax.set_ylabel("Avg of" {error_metric})
         ax.set_xlabel(f"Number of predicted nodes among {n} nodes")
         if use_log_x:
             try: ax.set_xscale("log", base=2)
@@ -954,9 +954,9 @@ if __name__ == "__main__":
                                   graph_file="256grid_diameter30test.edgelist")
 
     # later: plot from Excel; pick which error to show on the left
-    plot_mb_vs_ours_from_excel("mb_compare_256.xlsx", use_avg=True, use_log_x=True, error_metric="ErrAvg")
+    # plot_mb_vs_ours_from_excel("mb_compare_256.xlsx", use_avg=True, use_log_x=True, error_metric="ErrAvg")
     # # or
-    # plot_mb_vs_ours_from_excel("mb_compare_256.xlsx", use_avg=True, use_log_x=True, error_metric="ErrMax")
+    plot_mb_vs_ours_from_excel("mb_compare_256.xlsx", use_avg=True, use_log_x=True, error_metric="ErrMax")
     # # or
     # plot_mb_vs_ours_from_excel("mb_compare_256.xlsx", use_avg=True, use_log_x=True, error_metric="ErrMin")
 
