@@ -13,7 +13,7 @@ import datetime as dt
 PREDICTION_FRACTIONS = [0.03125, 0.0625, 0.125, 0.25, 0.5]
 ERROR_VALUES = [999999999999999999999999999999999999, 10, 5, 3.33333333333333333333333333, 2.5, 2]
 ERROR_VALUES_2       = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
-NUM_TRIALS           = 50
+NUM_TRIALS           = 20
 DEBUG                = True
 down_link = {}
 
@@ -540,8 +540,10 @@ def simulate_halving(graph_file, use_move_stretch=False):
 def plot_results_halving_counts(results, n=None, title_suffix=" (halving mode)", use_log_x=True):
     """
     Same input schema as before. Shows x-axis as |P| counts (1,2,4,...,n/2).
-    If use_log_x=True, use log2 scale to de-crowd the small counts.
+    Left error subplot y-axis fixed to 0..0.5 with ticks at 0.1.
     """
+    from matplotlib.ticker import FormatStrFormatter  # local import
+
     df  = pd.DataFrame(results, columns=["Frac","ErrRate","Err","Str"])
 
     # infer n if not provided
@@ -584,7 +586,13 @@ def plot_results_halving_counts(results, n=None, title_suffix=" (halving mode)",
     for e in ERROR_VALUES_2:
         sub = avg[avg.ErrRate == e].sort_values("Count", ascending=True)
         ax.plot(sub.Count, sub.Err, "-o", label=f"{e:.1f} Error")
-    prettify_axis(ax, "Error vs |P| (halving)"+title_suffix, "Error (Max)")
+    prettify_axis(ax, "Error vs |P| (halving)"+title_suffix, "Error")
+
+    # --- lock y-axis to 0..0.5 with ticks every 0.1 ---
+    ax.set_ylim(0, 0.5)
+    ax.set_yticks(np.arange(0, 0.51, 0.1))
+    ax.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
+
     ax.legend(loc="upper right")
 
     # -------- Stretch vs |P| --------
@@ -710,9 +718,11 @@ def simulate_halving_compare_multibend(graph_file):
 def plot_mb_vs_ours_per_error(results, n, err_levels=None, use_log_x=False, save=False, prefix="mb_vs_ours"):
     """
     Makes 1x2 figures like your reference image, one figure per error cutoff.
-    Left:  Error vs |P| (halving)
+    Left:  Error vs |P| (halving)  — Y-axis fixed to 0..0.5 with ticks at 0.1.
     Right: Our stretch vs MultiBend move stretch
     """
+    from matplotlib.ticker import FormatStrFormatter  # local import
+
     if err_levels is None:
         err_levels = ERROR_VALUES_2
 
@@ -741,19 +751,20 @@ def plot_mb_vs_ours_per_error(results, n, err_levels=None, use_log_x=False, save
         ax.grid(True, axis="y", alpha=0.35)
         ax.legend(loc="upper left")
 
+        # --- lock y-axis to 0..0.5 with ticks every 0.1 ---
+        ax.set_ylim(0, 0.5)
+        ax.set_yticks(np.arange(0, 0.51, 0.1))
+        ax.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
+
         # -------- Right: Stretch comparison --------
-        
         ax = axes[1]
         x = avg["Count"].to_numpy(dtype=float)
 
-        # small horizontal jitter so overlapping lines are visible on log2 axis
         ax.plot(x*0.985, avg["OurStr"], "-o", label=f"Our Stretch ≤ {e:.1f}", zorder=3)
         ax.plot(x*1.015, avg["MBStr"], "--s", label=f"MultiBend Stretch ≤ {e:.1f}", alpha=0.85, zorder=2)
 
-        # y-axis from 0 to the max across both curves
         ymax = float(np.nanmax([avg["OurStr"].max(), avg["MBStr"].max()]))
         ax.set_ylim(0, ymax * 1.05)
-
 
         ax.set_title("Our Stretch vs Multibend Stretch")
         ax.set_ylabel("Stretch")
@@ -765,13 +776,13 @@ def plot_mb_vs_ours_per_error(results, n, err_levels=None, use_log_x=False, save
         ax.grid(True, axis="y", alpha=0.35)
         ax.legend(loc="best")
 
-
         if save:
             out = f"{prefix}_err_{str(e).replace('.','p')}.png"
             plt.savefig(out, dpi=180)
             print("saved:", out)
         else:
             plt.show()
+
 
 
 # ---------multibend comparison add-ons complete----------------------------
@@ -818,7 +829,10 @@ def plot_mb_vs_ours_from_excel(filename, use_avg=True, err_levels=None,
     """
     Recreate the per-error plots from an Excel file written by save_compare_results_to_excel().
     error_metric ∈ {'ErrAvg', 'ErrMax', 'ErrMin'} controls the left-hand curve.
+    Left plot y-axis is fixed to 0..0.5 with ticks every 0.1.
     """
+    from matplotlib.ticker import FormatStrFormatter  # local import to keep this function standalone
+
     # read meta (to get n)
     meta = pd.read_excel(filename, sheet_name="meta")
     n = int(meta["n"].iloc[0])
@@ -834,7 +848,10 @@ def plot_mb_vs_ours_from_excel(filename, use_avg=True, err_levels=None,
 
     # validate error metric
     if error_metric not in df.columns:
-        raise ValueError(f"Column '{error_metric}' not found. Available: {', '.join([c for c in ['ErrAvg','ErrMax','ErrMin'] if c in df.columns])}")
+        raise ValueError(
+            f"Column '{error_metric}' not found. "
+            f"Available: {', '.join([c for c in ['ErrAvg','ErrMax','ErrMin'] if c in df.columns])}"
+        )
 
     if err_levels is None:
         err_levels = ERROR_VALUES_2
@@ -848,7 +865,7 @@ def plot_mb_vs_ours_from_excel(filename, use_avg=True, err_levels=None,
 
         fig, axes = plt.subplots(1, 2, figsize=(12, 6), constrained_layout=True)
 
-        # Left: chosen error metric vs |P|
+        # ---------------- Left: chosen error metric vs |P| ----------------
         ax = axes[0]
         ax.plot(xvals, avg[error_metric], "-o", label=f"ErrRate ≤ {e:.1f}")
         ax.set_title("Error vs Fraction of Predicted Nodes")
@@ -861,7 +878,12 @@ def plot_mb_vs_ours_from_excel(filename, use_avg=True, err_levels=None,
         ax.grid(True, axis="y", alpha=0.35)
         ax.legend(loc="upper left")
 
-        # Right: stretches
+        # --- lock y-axis to 0..0.5 with ticks every 0.1 ---
+        ax.set_ylim(0, 0.5)
+        ax.set_yticks(np.arange(0, 0.51, 0.1))
+        ax.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
+
+        # ---------------- Right: stretches ----------------
         ax = axes[1]
         ax.plot(xvals*0.985, avg["OurStr"], "-o", label=f"Our Stretch for ErrRate ≤ {e:.1f}", zorder=3)
         ax.plot(xvals*1.015, avg["MBStr"], "--s", label=f"MultiBend Stretch for ErrRate ≤ {e:.1f}", alpha=0.85, zorder=2)
@@ -885,6 +907,7 @@ def plot_mb_vs_ours_from_excel(filename, use_avg=True, err_levels=None,
             print("saved:", out)
         else:
             plt.show()
+
 
 # ========================================================================
 
