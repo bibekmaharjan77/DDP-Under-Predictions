@@ -13,7 +13,7 @@ import datetime as dt
 PREDICTION_FRACTIONS = [0.03125, 0.0625, 0.125, 0.25, 0.5]
 ERROR_VALUES = [999999999999999999999999999999999999, 10, 5, 3.33333333333333333333333333, 2.5, 2]
 ERROR_VALUES_2       = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
-NUM_TRIALS           = 20
+NUM_TRIALS           = 10
 DEBUG                = True
 down_link = {}
 
