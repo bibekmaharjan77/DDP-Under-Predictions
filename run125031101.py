@@ -7,12 +7,13 @@ from collections import Counter, defaultdict
 import pandas as pd
 import numpy as np
 from matplotlib.ticker import FixedLocator
+import datetime as dt
 
 # ---------------------------- CONFIGURATION ----------------------------
 PREDICTION_FRACTIONS = [0.03125, 0.0625, 0.125, 0.25, 0.5]
 ERROR_VALUES = [999999999999999999999999999999999999, 10, 5, 3.33333333333333333333333333, 2.5, 2]
 ERROR_VALUES_2       = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
-NUM_TRIALS           = 20
+NUM_TRIALS           = 10
 DEBUG                = True
 down_link = {}
 
@@ -157,92 +158,92 @@ def publish(owner, leader_map):
 
 # ---------------------------- STRETCH MEASUREMENT ----------------------------
 
+
+def _single_request_costs(r, owner, leader_map, G, weight=None, trace=False):
+    """
+    Return (up_hops, down_hops, obj) for a single request r given current owner.
+    obj is the shortest-path distance from owner -> r.
+    """
+    # publish at the current owner
+    publish(owner, leader_map)
+
+    # ---- UP: climb r's spiral until it hits a published pointer
+    sp = get_spiral(r, leader_map)
+    up_hops = 0
+    intersection = None
+    for i in range(len(sp) - 1):
+        u, v = sp[i], sp[i+1]
+        d = nx.shortest_path_length(G, u, v, weight=weight)
+        up_hops += d
+        if v in down_link:
+            intersection = v
+            break
+    if intersection is None:
+        intersection = sp[-1]  # root leader
+
+    # ---- DOWN: follow pointers; if missing, jump directly to owner
+    down_hops = 0
+    cur = intersection
+    seen = {cur}
+    while cur != owner:
+        nxt = down_link.get(cur)
+        if nxt is None or nxt in seen:
+            down_hops += nx.shortest_path_length(G, cur, owner, weight=weight)
+            break
+        down_hops += nx.shortest_path_length(G, cur, nxt, weight=weight)
+        seen.add(nxt)
+        cur = nxt
+
+    # ---- object forwarding hop
+    obj = nx.shortest_path_length(G, owner, r, weight=weight)
+
+    if trace:
+        print(f"[costs] r={r} up={up_hops} down={down_hops} obj={obj}")
+
+    return up_hops, down_hops, obj
+
+
+
 def measure_stretch(requesters, owner, leader_map, G, weight=None, trace=True):
     """
-    Compute average stretch over `requesters` w.r.t. current `owner`.
-    - weight: pass "weight" if the graph has weighted edges; default None (unweighted).
-    - trace:  print per-segment costs for UP (spiral climb) and DOWN (pointer chain).
+    LOOKUP stretch (your current metric):
+      sum(UP+DOWN) / sum(OPT), where OPT = shortest(owner, requester).
+    Kept for backward compatibility.
     """
-    global down_link
     total_up_down = 0
     total_opt     = 0
 
     for r in requesters:
         if r == owner:
             continue
+        up, down, obj = _single_request_costs(r, owner, leader_map, G, weight, trace and DEBUG)
+        total_up_down += (up + down)
+        total_opt     += obj
+        owner = r  # move ownership for next step (your model does this)
+        publish(owner, leader_map)
 
-        # 1) Upward climb along the spiral until we meet the published path
-        sp = get_spiral(r, leader_map)
-        up_segments = []
-        up_hops = 0
-        intersection = None
+    return (total_up_down / total_opt) if total_opt > 0 else 1.0
 
-        if trace:
-            print(f"\nRequester {r}:")
-            print(f"  Spiral: {sp}")
 
-        for i in range(len(sp) - 1):
-            u, v = sp[i], sp[i+1]
-            d = nx.shortest_path_length(G, u, v, weight=weight)
-            up_segments.append((u, v, d))
-            up_hops += d
-            if v in down_link:
-                intersection = v
-                break
 
-        if intersection is None:
-            intersection = sp[-1]  # root leader
+def measure_stretch_move(requesters, owner, leader_map, G, weight=None, trace=True):
+    """
+    MOVE stretch (what MultiBend reports):
+      sum(UP + DOWN + OBJ) / sum(OBJ)  ==  1 + sum(UP+DOWN)/sum(OBJ)
+    """
+    total_alg = 0
+    total_opt = 0
 
-        if trace:
-            print("  Upward segments:")
-            for u, v, d in up_segments:
-                print(f"    {u} -> {v} = {d}")
-            print(f"  Intersection at: {intersection}")
-
-        # 2) Downward: follow published pointers; if missing, jump directly
-        down_segments = []
-        down_hops = 0
-        cur = intersection
-        seen = {cur}
-        while cur != owner:
-            nxt = down_link.get(cur)
-            if nxt is None or nxt in seen:
-                d = nx.shortest_path_length(G, cur, owner, weight=weight)
-                down_segments.append((cur, owner, d, "DIRECT"))
-                down_hops += d
-                break
-            d = nx.shortest_path_length(G, cur, nxt, weight=weight)
-            down_segments.append((cur, nxt, d, "POINTER"))
-            down_hops += d
-            seen.add(nxt)
-            cur = nxt
-
-        if trace:
-            print("  Downward segments:")
-            for u, v, d, kind in down_segments:
-                extra = " [DIRECT]" if kind == "DIRECT" else ""
-                print(f"    {u} -> {v} = {d}{extra}")
-
-        dist_sp  = up_hops + down_hops
-        dist_opt = nx.shortest_path_length(G, r, owner, weight=weight)
-        stretch  = dist_sp / dist_opt if dist_opt > 0 else 1.0
-
-        if trace:
-            print(f"  Up hops: {up_hops}")
-            print(f"  Down hops: {down_hops}")
-            print(f"  Total hops: {dist_sp}")
-            print(f"  Shortest path (opt): {dist_opt}")
-            print(f"  Stretch: {stretch:.3f}")
-
-        total_up_down += dist_sp
-        total_opt     += dist_opt
-
-        # Move ownership and republish for the next requester
+    for r in requesters:
+        if r == owner:
+            continue
+        up, down, obj = _single_request_costs(r, owner, leader_map, G, weight, trace and DEBUG)
+        total_alg += (up + down + obj)
+        total_opt += obj
         owner = r
         publish(owner, leader_map)
 
-    # return (total_up_down / total_opt) if total_opt > 0 else 1.0
-    return total_up_down, total_opt
+    return (total_alg / total_opt) if total_opt > 0 else 1.0
 
 
 
@@ -351,42 +352,51 @@ def calculate_error(Vp, Q, G_example):
     print(f"{RED}\nOverall min error (min_i(distance_in_G / diameter_G)) = {total_min_error:.4f}{RESET}")
     return total_max_error
 
+
+# -----calaulate error stats to get max, min and avg error-------------
+def calculate_error_stats(Vp, Q, G):
+    diam = nx.diameter(G, weight='weight')
+    vals = []
+    for req, pred in zip(Q, Vp):
+        d = nx.shortest_path_length(G, req, pred, weight='weight')
+        vals.append(d / diam)
+    if not vals:
+        return 0.0, 0.0, 0.0
+    return max(vals), min(vals), float(sum(vals)/len(vals))
+
+
+
 # ---------------------------- SIMULATION ----------------------------
 
-def simulate(graph_file):
+def simulate(graph_file, use_move_stretch=False):
     G = load_graph(graph_file)
     size = int(math.sqrt(G.number_of_nodes()))
     H = build_mesh_hierarchy(size)
     print_clusters(H)
     leaders = assign_cluster_leaders(H)
 
+    measure_fn = measure_stretch_move if use_move_stretch else measure_stretch
     results = []
     for error in ERROR_VALUES:
-      for frac in PREDICTION_FRACTIONS:
-        # ←– ADD THESE TWO LINES HERE
-        owner = random.choice(list(G.nodes()))
-        publish(owner, leaders)
-
-        for _ in range(NUM_TRIALS):
-          pred = choose_Vp(G, frac)
-          act  = sample_Q_within_diameter(G, pred, error)
-          err  = calculate_error(pred, act, G)
-
-          for req in act:
-            if req == owner: 
-              continue
-            stretch = measure_stretch([req], owner, leaders, G)
-
-            if error > 15:
-              err_rate = 0.0
-            else:
-              err_rate = round(1.0 / error, 1)
-
-            results.append((frac, err_rate, err, stretch))
-
-            owner = req
+        for frac in PREDICTION_FRACTIONS:
+            owner = random.choice(list(G.nodes()))
             publish(owner, leaders)
 
+            for _ in range(NUM_TRIALS):
+                pred = choose_Vp(G, frac)
+                act  = sample_Q_within_diameter(G, pred, error)
+                err  = calculate_error(pred, act, G)
+
+                for req in act:
+                    if req == owner:
+                        continue
+                    stretch = measure_fn([req], owner, leaders, G, trace=False)
+
+                    err_rate = 0.0 if error > 15 else round(1.0 / error, 1)
+                    results.append((frac, err_rate, err, stretch))
+
+                    owner = req
+                    publish(owner, leaders)
     return results
 
 
@@ -492,11 +502,7 @@ def choose_Vp_halving(G, k: int):
     return original_Vp
 
 
-def simulate_halving(graph_file):
-    """
-    Same outputs as simulate(): list of (Frac, ErrRate, Err, Str).
-    Only difference: |P| runs over {n/2, n/4, ..., 1}, with Frac = k/n.
-    """
+def simulate_halving(graph_file, use_move_stretch=False):
     G = load_graph(graph_file)
     n = G.number_of_nodes()
     size = int(math.sqrt(n))
@@ -504,33 +510,29 @@ def simulate_halving(graph_file):
     print_clusters(H)
     leaders = assign_cluster_leaders(H)
 
+    measure_fn = measure_stretch_move if use_move_stretch else measure_stretch
     k_values = halving_counts(n)
     results = []
 
     for error in ERROR_VALUES:
         for k in k_values:
-            frac = k / n  # so plots are still vs fraction
-
-            # reset ownership for this bucket
+            frac = k / n
             owner = random.choice(list(G.nodes()))
             publish(owner, leaders)
 
             for _ in range(NUM_TRIALS):
-                P = choose_Vp_halving(G, k)              # <- mirrors original choose_Vp
-                Q = sample_Q_within_diameter(G, P, error)  # |Q| == |P|
+                P = choose_Vp_halving(G, k)
+                Q = sample_Q_within_diameter(G, P, error)
                 err = calculate_error(P, Q, G)
 
                 for req in Q:
                     if req == owner:
                         continue
-                    stretch = measure_stretch([req], owner, leaders, G, trace=False)
-
+                    stretch = measure_fn([req], owner, leaders, G, trace=False)
                     err_rate = 0.0 if error > 15 else round(1.0 / error, 1)
                     results.append((frac, err_rate, err, stretch))
-
                     owner = req
                     publish(owner, leaders)
-
     return results
 
 
@@ -538,8 +540,10 @@ def simulate_halving(graph_file):
 def plot_results_halving_counts(results, n=None, title_suffix=" (halving mode)", use_log_x=True):
     """
     Same input schema as before. Shows x-axis as |P| counts (1,2,4,...,n/2).
-    If use_log_x=True, use log2 scale to de-crowd the small counts.
+    Left error subplot y-axis fixed to 0..0.5 with ticks at 0.1.
     """
+    from matplotlib.ticker import FormatStrFormatter  # local import
+
     df  = pd.DataFrame(results, columns=["Frac","ErrRate","Err","Str"])
 
     # infer n if not provided
@@ -582,7 +586,13 @@ def plot_results_halving_counts(results, n=None, title_suffix=" (halving mode)",
     for e in ERROR_VALUES_2:
         sub = avg[avg.ErrRate == e].sort_values("Count", ascending=True)
         ax.plot(sub.Count, sub.Err, "-o", label=f"{e:.1f} Error")
-    prettify_axis(ax, "Error vs |P| (halving)"+title_suffix, "Error (Max)")
+    prettify_axis(ax, "Error vs |P| (halving)"+title_suffix, "Error")
+
+    # --- lock y-axis to 0..0.5 with ticks every 0.1 ---
+    ax.set_ylim(0, 0.5)
+    ax.set_yticks(np.arange(0, 0.51, 0.1))
+    ax.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
+
     ax.legend(loc="upper right")
 
     # -------- Stretch vs |P| --------
@@ -656,16 +666,20 @@ def multibend_move_sequence_stretch(requesters, owner, leader_map, G, weight=Non
         # move object to r and continue
         owner = r
 
-    return total_alg
+    return (total_alg / total_opt) if total_opt > 0 else 1.0
 
 
 
-def simulate_halving_compare_multibend(graph_file):
+def simulate_halving_compare_multibend(graph_file,
+                                       q_size_mode: str = "uniform",
+                                       q_fixed: int | float | None = None):
     """
-    Returns rows: (Frac, ErrRate, Err, OurStr, MBStr).
-    Uses your halving counts. For each request in Q, we compute:
-      - OurStr:   your current up+down stretch (single request)
-      - MBStr:    MultiBend move stretch for that single step = 1 + (up+down)/obj
+    Returns rows:
+      (Frac, ErrRate, QCount, ErrMax, ErrMin, ErrAvg, OurStr, MBStr)
+    where:
+      - Frac    = |P| / n       (predicted set size fraction, same as before)
+      - QCount  = |Q|           (new: actual requests drawn this batch, ≤ |P|)
+    Error stats are computed PER BATCH over (P_sub, Q) pairs.
     """
     G = load_graph(graph_file)
     n = G.number_of_nodes()
@@ -684,36 +698,44 @@ def simulate_halving_compare_multibend(graph_file):
             publish(owner, leaders)
 
             for _ in range(NUM_TRIALS):
-                P = choose_Vp_halving(G, k)
-                Q = sample_Q_within_diameter(G, P, error)
-                err = calculate_error(P, Q, G)
+                P_full = choose_Vp_halving(G, k)
+
+                # NEW: pick a subset-sized batch of requests
+                P_sub, Q = sample_Q_subset_within_diameter(
+                    G, P_full, error_cutoff=error, q_size=None,
+                    q_size_mode=q_size_mode, q_fixed=q_fixed
+                )
+
+                # compute per-batch error stats on aligned pairs
+                err_max, err_min, err_avg = calculate_error_stats(P_sub, Q, G)
+                qcount = len(Q)
 
                 for req in Q:
                     if req == owner:
                         continue
 
-                    # our (lookup-style) stretch for this single request
-                    our_cost, opt_cost = measure_stretch([req], owner, leaders, G, trace=False)
-
-                    # MB move-stretch for this single step
-                    mb_str = multibend_move_sequence_stretch([req], owner, leaders, G)
+                    our_str = measure_stretch_move([req], owner, leaders, G, trace=False)
+                    mb_str  = multibend_move_sequence_stretch([req], owner, leaders, G)
 
                     err_rate = 0.0 if error > 15 else round(1.0 / error, 1)
-                    results.append((frac, err_rate, err, our_cost, mb_str))
+                    # NOTE: include QCount in the row
+                    results.append((frac, err_rate, qcount, err_max, err_min, err_avg, our_str, mb_str))
 
                     owner = req
-                    publish(owner, leaders)
-
     return results
+
+
 
 
 
 def plot_mb_vs_ours_per_error(results, n, err_levels=None, use_log_x=False, save=False, prefix="mb_vs_ours"):
     """
     Makes 1x2 figures like your reference image, one figure per error cutoff.
-    Left:  Error vs |P| (halving)
+    Left:  Error vs |P| (halving)  — Y-axis fixed to 0..0.5 with ticks at 0.1.
     Right: Our stretch vs MultiBend move stretch
     """
+    from matplotlib.ticker import FormatStrFormatter  # local import
+
     if err_levels is None:
         err_levels = ERROR_VALUES_2
 
@@ -734,7 +756,7 @@ def plot_mb_vs_ours_per_error(results, n, err_levels=None, use_log_x=False, save
         ax.plot(avg["Count"], avg["Err"], "-o", label=f"Prediction Error ≤ {e:.1f}")
         ax.set_title("Error vs Fraction of Predicted Nodes")
         ax.set_ylabel("Average of Max Error")
-        ax.set_xlabel(f"Number of predicted nodes among {n} nodes (# of operations)")
+        ax.set_xlabel(f"Number of predicted nodes among {n} nodes")
         if use_log_x:
             try: ax.set_xscale("log", base=2)
             except TypeError: ax.set_xscale("log", basex=2)
@@ -742,17 +764,28 @@ def plot_mb_vs_ours_per_error(results, n, err_levels=None, use_log_x=False, save
         ax.grid(True, axis="y", alpha=0.35)
         ax.legend(loc="upper left")
 
+        # --- lock y-axis to 0..0.5 with ticks every 0.1 ---
+        ax.set_ylim(0, 0.5)
+        ax.set_yticks(np.arange(0, 0.51, 0.1))
+        ax.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
+
         # -------- Right: Stretch comparison --------
         ax = axes[1]
-        ax.plot(avg["Count"], avg["OurStr"], "-o", label=f"Our Stretch ≤ {e:.1f}")
-        ax.plot(avg["Count"], avg["MBStr"], "-o", label=f"MultiBend Stretch ≤ {e:.1f}")
+        x = avg["Count"].to_numpy(dtype=float)
+
+        ax.plot(x*0.985, avg["OurStr"], "-o", label=f"Our Stretch ≤ {e:.1f}", zorder=3)
+        ax.plot(x*1.015, avg["MBStr"], "--s", label=f"MultiBend Stretch ≤ {e:.1f}", alpha=0.85, zorder=2)
+
+        ymax = float(np.nanmax([avg["OurStr"].max(), avg["MBStr"].max()]))
+        ax.set_ylim(0, ymax * 1.05)
+
         ax.set_title("Our Stretch vs Multibend Stretch")
-        ax.set_ylabel("PA rrow Stretch" if e == 0.0 else "Stretch")
-        ax.set_xlabel(f"Number of predicted nodes among {n} nodes (# of operations)")
+        ax.set_ylabel("Stretch")
+        ax.set_xlabel(f"Number of predicted nodes among {n} nodes")
         if use_log_x:
             try: ax.set_xscale("log", base=2)
             except TypeError: ax.set_xscale("log", basex=2)
-        ax.set_xticks(xvals)
+        ax.set_xticks(x)
         ax.grid(True, axis="y", alpha=0.35)
         ax.legend(loc="best")
 
@@ -764,26 +797,241 @@ def plot_mb_vs_ours_per_error(results, n, err_levels=None, use_log_x=False, save
             plt.show()
 
 
+
 # ---------multibend comparison add-ons complete----------------------------
+
+# ========== Excel helpers (add these) ======================================
+
+def save_compare_results_to_excel(results, n, filename, graph_file=None):
+    """
+    Save results to .xlsx.
+    Sheets:
+      - 'raw':      one row per request; includes QCount, ErrMax, ErrMin, ErrAvg
+      - 'avg':      mean aggregated by (Count=|P|, ErrRate) for all metrics
+      - 'avg_by_Q': mean aggregated by (QCount=|Q|, ErrRate) for all metrics
+      - 'meta':     run metadata
+    """
+    cols = ["Frac","ErrRate","QCount","ErrMax","ErrMin","ErrAvg","OurStr","MBStr"]
+    df   = pd.DataFrame(results, columns=cols)
+
+    # derived sizes
+    df["Count"] = (df["Frac"] * n).round().astype(int)  # |P|
+    df["QFrac"] = df["QCount"] / float(n)
+
+    # group means (P-based)
+    avg = df.groupby(["Count","ErrRate"], as_index=False).mean(numeric_only=True)
+    # group means (Q-based)
+    avg_by_q = df.groupby(["QCount","ErrRate"], as_index=False).mean(numeric_only=True)
+
+    meta = {
+        "n": n,
+        "graph_file": graph_file or "",
+        "num_trials": NUM_TRIALS,
+        "prediction_fracs": ",".join(map(str, PREDICTION_FRACTIONS)),
+        "error_levels": ",".join(map(str, ERROR_VALUES_2)),
+        "timestamp": dt.datetime.now().isoformat(timespec="seconds"),
+        "notes": "QCount ≤ Count. Err* columns are per-batch (P_sub,Q) stats copied to each request row."
+    }
+
+    with pd.ExcelWriter(filename, engine="xlsxwriter") as xw:
+        df.to_excel(xw, sheet_name="raw", index=False)
+        avg.to_excel(xw, sheet_name="avg", index=False)
+        avg_by_q.to_excel(xw, sheet_name="avg_by_Q", index=False)
+        pd.DataFrame([meta]).to_excel(xw, sheet_name="meta", index=False)
+    print(f"saved Excel: {filename}")
+
+
+
+
+def plot_mb_vs_ours_from_excel(filename, use_avg=True, err_levels=None,
+                               use_log_x=False, save=False, prefix="mb_vs_ours_from_xlsx",
+                               error_metric="ErrAvg", group_by: str = "P"):
+    """
+    Recreate the per-error plots from the Excel file.
+    error_metric ∈ {'ErrAvg','ErrMax','ErrMin'} controls the left-hand curve.
+    group_by ∈ {'P','Q'} chooses the x-axis: |P| (Count) or |Q| (QCount).
+    Left plot y-axis is fixed to 0..0.5 with ticks every 0.1.
+    """
+    from matplotlib.ticker import FormatStrFormatter
+
+    # read meta (to get n)
+    meta = pd.read_excel(filename, sheet_name="meta")
+    n = int(meta["n"].iloc[0])
+
+    # read data
+    if use_avg:
+        if group_by == "P":
+            df = pd.read_excel(filename, sheet_name="avg")
+            xcol = "Count"
+        else:
+            df = pd.read_excel(filename, sheet_name="avg_by_Q")
+            xcol = "QCount"
+    else:
+        raw = pd.read_excel(filename, sheet_name="raw")
+        if "Count" not in raw.columns:
+            raw["Count"] = (raw["Frac"] * n).round().astype(int)
+        if "QFrac" not in raw.columns and "QCount" in raw.columns:
+            raw["QFrac"] = raw["QCount"] / float(n)
+
+        xcol = "Count" if group_by == "P" else "QCount"
+        df = raw.groupby([xcol, "ErrRate"], as_index=False).mean(numeric_only=True)
+
+    # validate error metric
+    if error_metric not in df.columns:
+        raise ValueError(
+            f"Column '{error_metric}' not found. "
+            f"Available: {', '.join([c for c in ['ErrAvg','ErrMax','ErrMin'] if c in df.columns])}"
+        )
+
+    if err_levels is None:
+        err_levels = ERROR_VALUES_2
+
+    for e in err_levels:
+        sub = df[df.ErrRate == e].copy()
+        if sub.empty:
+            continue
+        avg = sub.sort_values(xcol)
+        xvals = avg[xcol].to_numpy(dtype=float)
+
+        fig, axes = plt.subplots(1, 2, figsize=(12, 6), constrained_layout=True)
+
+        # ---------------- Left: chosen error metric vs size ----------------
+        ax = axes[0]
+        ax.plot(xvals, avg[error_metric], "-o", label=f"ErrRate ≤ {e:.1f}")
+        ax.set_title(f"Error vs {'|P|' if group_by=='P' else '|Q|'}")
+        ax.set_ylabel(f"{error_metric}")
+        ax.set_xlabel(f"{'Number of predicted nodes (|P|)' if group_by=='P' else 'Number of requests (|Q|)'}")
+        if use_log_x:
+            try: ax.set_xscale("log", base=2)
+            except TypeError: ax.set_xscale("log", basex=2)
+        ax.set_xticks(xvals)
+        ax.grid(True, axis="y", alpha=0.35)
+        ax.legend(loc="upper left")
+
+        # --- lock y-axis to 0..0.5 with ticks every 0.1 ---
+        ax.set_ylim(0, 0.5)
+        ax.set_yticks(np.arange(0, 0.51, 0.1))
+        ax.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
+
+        # ---------------- Right: stretches ----------------
+        ax = axes[1]
+        jitter = 0.015 if xvals.size else 0
+        ax.plot(xvals*(1-jitter), avg["OurStr"], "-o", label=f"Our Stretch ≤ {e:.1f}", zorder=3)
+        ax.plot(xvals*(1+jitter), avg["MBStr"], "--s", label=f"MultiBend Stretch ≤ {e:.1f}", alpha=0.85, zorder=2)
+
+        ymax = float(np.nanmax([avg["OurStr"].max(), avg["MBStr"].max()]))
+        ax.set_ylim(0, ymax * 1.05)
+
+        ax.set_title("Our Stretch vs Multibend Stretch")
+        ax.set_ylabel("Stretch")
+        ax.set_xlabel(f"{'Number of predicted nodes (|P|)' if group_by=='P' else 'Number of requests (|Q|)'}")
+        if use_log_x:
+            try: ax.set_xscale("log", base=2)
+            except TypeError: ax.set_xscale("log", basex=2)
+        ax.set_xticks(xvals)
+        ax.grid(True, axis="y", alpha=0.35)
+        ax.legend(loc="best")
+
+        if save:
+            suffix = "byP" if group_by=="P" else "byQ"
+            out = f"{prefix}_{suffix}_{error_metric}_err_{str(e).replace('.','p')}.png"
+            plt.savefig(out, dpi=180)
+            print("saved:", out)
+        else:
+            plt.show()
+
+
+
+# ========================================================================
+
+#  --- new helpers for subset flow-------------------------------
+
+def _choose_q_size(k: int, mode: str = "uniform", fixed: int | float | None = None) -> int:
+    """
+    Decide how many requests to draw (|Q|) given |P|=k.
+    mode:
+      - "uniform" (default): pick m ~ Uniform{1..k}
+      - "halving": pick m from {k, floor(k/2), floor(k/4), ..., 1}
+      - "fixed": use `fixed`:
+          * if int: m = clamp(fixed, 1..k)
+          * if float in (0,1]: m = clamp(round(fixed * k), 1..k)
+    """
+    k = max(1, int(k))
+    if mode == "fixed":
+        if fixed is None:
+            raise ValueError("mode='fixed' requires `fixed` to be set")
+        if isinstance(fixed, int):
+            return max(1, min(k, fixed))
+        if isinstance(fixed, float):
+            if not (0 < fixed <= 1):
+                raise ValueError("fixed float must be in (0,1]")
+            return max(1, min(k, int(round(fixed * k))))
+        raise TypeError("fixed must be int or float")
+
+    if mode == "halving":
+        ladder = [k]
+        while ladder[-1] > 1:
+            ladder.append(max(1, ladder[-1] // 2))
+        return random.choice(ladder)
+
+    # default: uniform in [1..k]
+    return random.randint(1, k)
+
+
+def sample_Q_subset_within_diameter(G, Vp, error_cutoff,
+                                    q_size: int | None = None,
+                                    q_size_mode: str = "uniform",
+                                    q_fixed: int | float | None = None):
+    """
+    Pick a subset of indices of Vp, generate one request near each chosen v.
+    Returns (Vp_sub, Q), where len(Vp_sub) == len(Q) == m ≤ |Vp|.
+    """
+    if not Vp:
+        return [], []
+
+    diam = nx.diameter(G, weight='weight')
+    # choose |Q|
+    k = len(Vp)
+    m = _choose_q_size(k, mode=q_size_mode, fixed=q_fixed) if q_size is None else max(1, min(k, int(q_size)))
+
+    # pick a subset of positions in Vp (without replacement) to anchor requests
+    idxs = random.sample(range(k), m)
+    Vp_sub = [Vp[i] for i in idxs]
+
+    # for each selected v, pick one request within cutoff = diam/error_cutoff (same as your current logic)
+    Q = []
+    cutoff = float(diam / error_cutoff) if error_cutoff != 0 else 0.0  # handle safety; your sentinel large number still goes to ~0 cutoff
+    for v in Vp_sub:
+        if cutoff <= 0.0:
+            # only itself at distance 0
+            Q.append(v)
+            continue
+        dist_map = nx.single_source_dijkstra_path_length(G, v, cutoff=cutoff, weight="weight")
+        # fallback: if for some reason cutoff returned empty (shouldn't), use v
+        Q.append(random.choice(list(dist_map.keys())) if dist_map else v)
+
+    return Vp_sub, Q
+
+
 
 
 # ---------------------------- MAIN ----------------------------
 
 if __name__ == "__main__":
     # old flow
-    # res = simulate("64grid_diameter14test.edgelist")
-    # res = simulate("144grid_diameter22test.edgelist")
-    # res = simulate("256grid_diameter30test.edgelist")
-    # res = simulate("576grid_diameter46test.edgelist")
-    # res = simulate("1024grid_diameter62test.edgelist")
+    # res = simulate("64grid_diameter14test.edgelist", use_move_stretch=True)
+    # res = simulate("144grid_diameter22test.edgelist", use_move_stretch=True)
+    # res = simulate("256grid_diameter30test.edgelist", use_move_stretch=True)
+    # res = simulate("576grid_diameter46test.edgelist", use_move_stretch=True)
+    # res = simulate("1024grid_diameter62test.edgelist", use_move_stretch=True)
     # print("I collected", len(res), "data points")
     # df  = pd.DataFrame(res, columns=["Frac","ErrRate","Err","Str"])
     # print(df.head())
     # plot_results(res)
 
     # ===== Halving mode flow =====
-    # res_half = simulate_halving("256grid_diameter30test.edgelist")
-    # res_half = simulate_halving("576grid_diameter46test.edgelist")
+    # res_half = simulate_halving("256grid_diameter30test.edgelist", use_move_stretch=True)
+    # res_half = simulate_halving("576grid_diameter46test.edgelist", use_move_stretch=True)
     # print("Halving mode collected", len(res_half), "points")
     # df  = pd.DataFrame(res_half, columns=["Frac","ErrRate","Err","Str"])
     # print(df.head())
@@ -792,9 +1040,53 @@ if __name__ == "__main__":
 
 
     # ===== Halving + MultiBend comparison (new flow) =====
-    # 1) generate comparison results on the same sequences
-    res_cmp = simulate_halving_compare_multibend("256grid_diameter30test.edgelist")
+    # # 1) generate comparison results on the same sequences
+    # res_cmp = simulate_halving_compare_multibend("256grid_diameter30test.edgelist")
 
-    # 2) make five figures (one per error cutoff).  Set use_log_x=True if you prefer log2 spacing.
-    plot_mb_vs_ours_per_error(res_cmp, n=256, use_log_x=True)
+    # # 2) make five figures (one per error cutoff).  Set use_log_x=True if you prefer log2 spacing.
+    # plot_mb_vs_ours_per_error(res_cmp, n=256, use_log_x=True)
+
+
+    # halving + multibend comparison + Excel
+    # # run the comparison once
+    # res_cmp = simulate_halving_compare_multibend("256grid_diameter30test.edgelist")
+
+    # # save raw + averaged with three error stats
+    # save_compare_results_to_excel(res_cmp, n=256, filename="mb_compare_256.xlsx",
+    #                               graph_file="256grid_diameter30test.edgelist")
+
+    # # later: plot from Excel; pick which error to show on the left
+    # # plot_mb_vs_ours_from_excel("mb_compare_256.xlsx", use_avg=True, use_log_x=True, error_metric="ErrAvg")
+    # # # or
+    # plot_mb_vs_ours_from_excel("mb_compare_256.xlsx", use_avg=True, use_log_x=True, error_metric="ErrMax")
+    # # # or
+    # # plot_mb_vs_ours_from_excel("mb_compare_256.xlsx", use_avg=True, use_log_x=True, error_metric="ErrMin")
+
+
+    # ===== Halving + MultiBend + Subset + Excel (newest flow) =====
+   
+    # res_cmp = simulate_halving_compare_multibend("256grid_diameter30test.edgelist",
+    #                                          q_size_mode="uniform")  # or "halving" / "fixed"
+
+    # # If we want fixed |Q|, e.g. always half of |P|, run:
+    # res_cmp = simulate_halving_compare_multibend("256grid_diameter30test.edgelist",
+    #                                          q_size_mode="fixed", q_fixed=0.125)
+
+    # If want a fixed count, run:
+    res_cmp = simulate_halving_compare_multibend("256grid_diameter30test.edgelist",
+                                             q_size_mode="fixed", q_fixed=18)                                         
+
+
+    save_compare_results_to_excel(res_cmp, n=256, filename="mb_compare_256.xlsx",
+                                  graph_file="256grid_diameter30test.edgelist")
+
+    # # Plot vs |P| (backward-compatible)
+    # plot_mb_vs_ours_from_excel("mb_compare_256.xlsx", use_avg=True, use_log_x=True,
+    #                            error_metric="ErrMax", group_by="P")
+
+    # Or plot vs |Q|
+    plot_mb_vs_ours_from_excel("mb_compare_256.xlsx", use_avg=True, use_log_x=True,
+                               error_metric="ErrMax", group_by="Q")
+
+    
 

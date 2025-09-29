@@ -13,7 +13,7 @@ import datetime as dt
 PREDICTION_FRACTIONS = [0.03125, 0.0625, 0.125, 0.25, 0.5]
 ERROR_VALUES = [999999999999999999999999999999999999, 10, 5, 3.33333333333333333333333333, 2.5, 2]
 ERROR_VALUES_2       = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
-NUM_TRIALS           = 20
+NUM_TRIALS           = 10
 DEBUG                = True
 down_link = {}
 
@@ -155,6 +155,38 @@ def publish(owner, leader_map):
     # Store a pointer at every leader in the spiral (except the last, which is the owner)
     for i in range(len(sp)-1, 0, -1):
         down_link[sp[i]] = sp[i-1]
+
+
+# prints some information (used by simulate function)
+def _pretty_list(lst, limit=30):
+    """
+    Compact string for long node lists. Shows head ... tail with a total count.
+    Keeps original ordering (important for showing P with duplicates).
+    """
+    lst = list(lst)
+    n = len(lst)
+    if n <= limit:
+        return "[" + ", ".join(map(str, lst)) + "]"
+    half = limit // 2
+    head = ", ".join(map(str, lst[:half]))
+    tail = ", ".join(map(str, lst[-half:]))
+    return f"[{head}, …, {tail}] (total {n})"
+
+def _dup_summary(lst, max_items=20):
+    """
+    Summary like '42×3, 77×2, ...' for elements that appeared more than once.
+    Useful because Vp is sampled with replacement.
+    """
+    from collections import Counter
+    dups = [(x, c) for x, c in Counter(lst).items() if c > 1]
+    if not dups:
+        return "(no duplicates)"
+    dups.sort(key=lambda t: -t[1])
+    s = ", ".join(f"{x}×{c}" for x, c in dups[:max_items])
+    if len(dups) > max_items:
+        s += ", …"
+    return s
+
 
 # ---------------------------- STRETCH MEASUREMENT ----------------------------
 
@@ -670,12 +702,20 @@ def multibend_move_sequence_stretch(requesters, owner, leader_map, G, weight=Non
 
 
 
-def simulate_halving_compare_multibend(graph_file):
+def simulate_halving_compare_multibend(graph_file,
+                                       q_size_mode: str = "uniform",
+                                       q_fixed: int | float | None = None,
+                                       verbose_batch: bool = False,
+                                       print_limit: int = 30):
     """
-    Returns rows: (Frac, ErrRate, ErrMax, ErrMin, ErrAvg, OurStr, MBStr).
-    Uses your halving counts. Error stats are computed PER BATCH (P,Q) and
-    repeated on every request row from that batch so you can still aggregate
-    by (Count, ErrRate) later.
+    Returns rows:
+      (Frac, ErrRate, QCount, ErrMax, ErrMin, ErrAvg, OurStr, MBStr)
+
+    If verbose_batch=True, prints per-batch info:
+      - owner at batch start
+      - |P| and P list (+ duplicate summary)
+      - |Q| and Q list
+      - error stats for (P_sub, Q)
     """
     G = load_graph(graph_file)
     n = G.number_of_nodes()
@@ -693,12 +733,32 @@ def simulate_halving_compare_multibend(graph_file):
             owner = random.choice(list(G.nodes()))
             publish(owner, leaders)
 
-            for _ in range(NUM_TRIALS):
-                P = choose_Vp_halving(G, k)
-                Q = sample_Q_within_diameter(G, P, error)
+            for trial in range(1, NUM_TRIALS + 1):
+                P_full = choose_Vp_halving(G, k)
 
-                err_max, err_min, err_avg = calculate_error_stats(P, Q, G)
+                # pick a subset-sized batch of requests
+                P_sub, Q = sample_Q_subset_within_diameter(
+                    G, P_full, error_cutoff=error, q_size=None,
+                    q_size_mode=q_size_mode, q_fixed=q_fixed
+                )
 
+                # compute per-batch error stats on aligned pairs
+                err_max, err_min, err_avg = calculate_error_stats(P_sub, Q, G)
+                qcount = len(Q)
+                err_rate = 0.0 if error > 15 else round(1.0 / error, 1)
+
+                if verbose_batch:
+                    print("\n" + "="*72)
+                    print(f"[Batch] graph={graph_file}  trial={trial}  ErrRate={err_rate:.1f} "
+                          f"|P|={k}  |Q|={qcount}  owner(start)={owner}")
+                    print(f"  P_full selections: {_pretty_list(P_full, print_limit)}")
+                    print(f"  P_full duplicates : {_dup_summary(P_full)}")
+                    print(f"  P_sub used (m={len(P_sub)}): {_pretty_list(P_sub, print_limit)}")
+                    print(f"  Q requests   (m={qcount}):  {_pretty_list(Q, print_limit)}")
+                    print(f"  Error stats (over pairs in this batch): "
+                          f"max={err_max:.3f}, min={err_min:.3f}, avg={err_avg:.3f}")
+
+                # per-request stretch (unchanged)
                 for req in Q:
                     if req == owner:
                         continue
@@ -706,11 +766,13 @@ def simulate_halving_compare_multibend(graph_file):
                     our_str = measure_stretch_move([req], owner, leaders, G, trace=False)
                     mb_str  = multibend_move_sequence_stretch([req], owner, leaders, G)
 
-                    err_rate = 0.0 if error > 15 else round(1.0 / error, 1)
-                    results.append((frac, err_rate, err_max, err_min, err_avg, our_str, mb_str))
+                    results.append((frac, err_rate, qcount, err_max, err_min, err_avg, our_str, mb_str))
 
+                    # move ownership (as before)
                     owner = req
+
     return results
+
 
 
 
@@ -791,19 +853,24 @@ def plot_mb_vs_ours_per_error(results, n, err_levels=None, use_log_x=False, save
 
 def save_compare_results_to_excel(results, n, filename, graph_file=None):
     """
-    Save simulate_halving_compare_multibend() results to an .xlsx file.
+    Save results to .xlsx.
     Sheets:
-      - 'raw': one row per request; includes ErrMax, ErrMin, ErrAvg
-      - 'avg': mean aggregated by (Count, ErrRate) for all metrics
-      - 'meta': run metadata (n, graph, trials, timestamp, etc.)
+      - 'raw':      one row per request; includes QCount, ErrMax, ErrMin, ErrAvg
+      - 'avg':      mean aggregated by (Count=|P|, ErrRate) for all metrics
+      - 'avg_by_Q': mean aggregated by (QCount=|Q|, ErrRate) for all metrics
+      - 'meta':     run metadata
     """
-    cols = ["Frac","ErrRate","ErrMax","ErrMin","ErrAvg","OurStr","MBStr"]
+    cols = ["Frac","ErrRate","QCount","ErrMax","ErrMin","ErrAvg","OurStr","MBStr"]
     df   = pd.DataFrame(results, columns=cols)
-    df["Count"] = (df["Frac"] * n).round().astype(int)
 
-    # group means for every numeric column except Frac
-    group_cols = ["Count","ErrRate"]
-    avg = df.groupby(group_cols, as_index=False).mean(numeric_only=True)
+    # derived sizes
+    df["Count"] = (df["Frac"] * n).round().astype(int)  # |P|
+    df["QFrac"] = df["QCount"] / float(n)
+
+    # group means (P-based)
+    avg = df.groupby(["Count","ErrRate"], as_index=False).mean(numeric_only=True)
+    # group means (Q-based)
+    avg_by_q = df.groupby(["QCount","ErrRate"], as_index=False).mean(numeric_only=True)
 
     meta = {
         "n": n,
@@ -812,26 +879,29 @@ def save_compare_results_to_excel(results, n, filename, graph_file=None):
         "prediction_fracs": ",".join(map(str, PREDICTION_FRACTIONS)),
         "error_levels": ",".join(map(str, ERROR_VALUES_2)),
         "timestamp": dt.datetime.now().isoformat(timespec="seconds"),
-        "notes": "ErrMax/ErrMin/ErrAvg are per-batch stats copied to each request row."
+        "notes": "QCount ≤ Count. Err* columns are per-batch (P_sub,Q) stats copied to each request row."
     }
 
     with pd.ExcelWriter(filename, engine="xlsxwriter") as xw:
         df.to_excel(xw, sheet_name="raw", index=False)
         avg.to_excel(xw, sheet_name="avg", index=False)
+        avg_by_q.to_excel(xw, sheet_name="avg_by_Q", index=False)
         pd.DataFrame([meta]).to_excel(xw, sheet_name="meta", index=False)
     print(f"saved Excel: {filename}")
 
 
 
+
 def plot_mb_vs_ours_from_excel(filename, use_avg=True, err_levels=None,
                                use_log_x=False, save=False, prefix="mb_vs_ours_from_xlsx",
-                               error_metric="ErrAvg"):
+                               error_metric="ErrAvg", group_by: str = "P"):
     """
-    Recreate the per-error plots from an Excel file written by save_compare_results_to_excel().
-    error_metric ∈ {'ErrAvg', 'ErrMax', 'ErrMin'} controls the left-hand curve.
+    Recreate the per-error plots from the Excel file.
+    error_metric ∈ {'ErrAvg','ErrMax','ErrMin'} controls the left-hand curve.
+    group_by ∈ {'P','Q'} chooses the x-axis: |P| (Count) or |Q| (QCount).
     Left plot y-axis is fixed to 0..0.5 with ticks every 0.1.
     """
-    from matplotlib.ticker import FormatStrFormatter  # local import to keep this function standalone
+    from matplotlib.ticker import FormatStrFormatter
 
     # read meta (to get n)
     meta = pd.read_excel(filename, sheet_name="meta")
@@ -839,12 +909,21 @@ def plot_mb_vs_ours_from_excel(filename, use_avg=True, err_levels=None,
 
     # read data
     if use_avg:
-        df = pd.read_excel(filename, sheet_name="avg")
+        if group_by == "P":
+            df = pd.read_excel(filename, sheet_name="avg")
+            xcol = "Count"
+        else:
+            df = pd.read_excel(filename, sheet_name="avg_by_Q")
+            xcol = "QCount"
     else:
         raw = pd.read_excel(filename, sheet_name="raw")
         if "Count" not in raw.columns:
             raw["Count"] = (raw["Frac"] * n).round().astype(int)
-        df = raw.groupby(["Count","ErrRate"], as_index=False).mean(numeric_only=True)
+        if "QFrac" not in raw.columns and "QCount" in raw.columns:
+            raw["QFrac"] = raw["QCount"] / float(n)
+
+        xcol = "Count" if group_by == "P" else "QCount"
+        df = raw.groupby([xcol, "ErrRate"], as_index=False).mean(numeric_only=True)
 
     # validate error metric
     if error_metric not in df.columns:
@@ -860,17 +939,17 @@ def plot_mb_vs_ours_from_excel(filename, use_avg=True, err_levels=None,
         sub = df[df.ErrRate == e].copy()
         if sub.empty:
             continue
-        avg = sub.sort_values("Count")
-        xvals = avg["Count"].to_numpy(dtype=float)
+        avg = sub.sort_values(xcol)
+        xvals = avg[xcol].to_numpy(dtype=float)
 
         fig, axes = plt.subplots(1, 2, figsize=(12, 6), constrained_layout=True)
 
-        # ---------------- Left: chosen error metric vs |P| ----------------
+        # ---------------- Left: chosen error metric vs size ----------------
         ax = axes[0]
         ax.plot(xvals, avg[error_metric], "-o", label=f"ErrRate ≤ {e:.1f}")
-        ax.set_title("Error vs Fraction of Predicted Nodes")
-        ax.set_ylabel(f"Avg of {error_metric}")
-        ax.set_xlabel(f"Number of predicted nodes among {n} nodes")
+        ax.set_title(f"Error vs {'|P|' if group_by=='P' else '|Q|'}")
+        ax.set_ylabel(f"{error_metric}")
+        ax.set_xlabel(f"{'Number of predicted nodes (|P|)' if group_by=='P' else 'Number of requests (|Q|)'}")
         if use_log_x:
             try: ax.set_xscale("log", base=2)
             except TypeError: ax.set_xscale("log", basex=2)
@@ -885,15 +964,16 @@ def plot_mb_vs_ours_from_excel(filename, use_avg=True, err_levels=None,
 
         # ---------------- Right: stretches ----------------
         ax = axes[1]
-        ax.plot(xvals*0.985, avg["OurStr"], "-o", label=f"Our Stretch for ErrRate ≤ {e:.1f}", zorder=3)
-        ax.plot(xvals*1.015, avg["MBStr"], "--s", label=f"MultiBend Stretch for ErrRate ≤ {e:.1f}", alpha=0.85, zorder=2)
+        jitter = 0.015 if xvals.size else 0
+        ax.plot(xvals*(1-jitter), avg["OurStr"], "-o", label=f"Our Stretch ≤ {e:.1f}", zorder=3)
+        ax.plot(xvals*(1+jitter), avg["MBStr"], "--s", label=f"MultiBend Stretch ≤ {e:.1f}", alpha=0.85, zorder=2)
 
         ymax = float(np.nanmax([avg["OurStr"].max(), avg["MBStr"].max()]))
         ax.set_ylim(0, ymax * 1.05)
 
         ax.set_title("Our Stretch vs Multibend Stretch")
         ax.set_ylabel("Stretch")
-        ax.set_xlabel(f"Number of predicted nodes among {n} nodes")
+        ax.set_xlabel(f"{'Number of predicted nodes (|P|)' if group_by=='P' else 'Number of requests (|Q|)'}")
         if use_log_x:
             try: ax.set_xscale("log", base=2)
             except TypeError: ax.set_xscale("log", basex=2)
@@ -902,14 +982,85 @@ def plot_mb_vs_ours_from_excel(filename, use_avg=True, err_levels=None,
         ax.legend(loc="best")
 
         if save:
-            out = f"{prefix}_{error_metric}_err_{str(e).replace('.','p')}.png"
+            suffix = "byP" if group_by=="P" else "byQ"
+            out = f"{prefix}_{suffix}_{error_metric}_err_{str(e).replace('.','p')}.png"
             plt.savefig(out, dpi=180)
             print("saved:", out)
         else:
             plt.show()
 
 
+
 # ========================================================================
+
+#  --- new helpers for subset flow-------------------------------
+
+def _choose_q_size(k: int, mode: str = "uniform", fixed: int | float | None = None) -> int:
+    """
+    Decide how many requests to draw (|Q|) given |P|=k.
+    mode:
+      - "uniform" (default): pick m ~ Uniform{1..k}
+      - "halving": pick m from {k, floor(k/2), floor(k/4), ..., 1}
+      - "fixed": use `fixed`:
+          * if int: m = clamp(fixed, 1..k)
+          * if float in (0,1]: m = clamp(round(fixed * k), 1..k)
+    """
+    k = max(1, int(k))
+    if mode == "fixed":
+        if fixed is None:
+            raise ValueError("mode='fixed' requires `fixed` to be set")
+        if isinstance(fixed, int):
+            return max(1, min(k, fixed))
+        if isinstance(fixed, float):
+            if not (0 < fixed <= 1):
+                raise ValueError("fixed float must be in (0,1]")
+            return max(1, min(k, int(round(fixed * k))))
+        raise TypeError("fixed must be int or float")
+
+    if mode == "halving":
+        ladder = [k]
+        while ladder[-1] > 1:
+            ladder.append(max(1, ladder[-1] // 2))
+        return random.choice(ladder)
+
+    # default: uniform in [1..k]
+    return random.randint(1, k)
+
+
+def sample_Q_subset_within_diameter(G, Vp, error_cutoff,
+                                    q_size: int | None = None,
+                                    q_size_mode: str = "uniform",
+                                    q_fixed: int | float | None = None):
+    """
+    Pick a subset of indices of Vp, generate one request near each chosen v.
+    Returns (Vp_sub, Q), where len(Vp_sub) == len(Q) == m ≤ |Vp|.
+    """
+    if not Vp:
+        return [], []
+
+    diam = nx.diameter(G, weight='weight')
+    # choose |Q|
+    k = len(Vp)
+    m = _choose_q_size(k, mode=q_size_mode, fixed=q_fixed) if q_size is None else max(1, min(k, int(q_size)))
+
+    # pick a subset of positions in Vp (without replacement) to anchor requests
+    idxs = random.sample(range(k), m)
+    Vp_sub = [Vp[i] for i in idxs]
+
+    # for each selected v, pick one request within cutoff = diam/error_cutoff (same as your current logic)
+    Q = []
+    cutoff = float(diam / error_cutoff) if error_cutoff != 0 else 0.0  # handle safety; your sentinel large number still goes to ~0 cutoff
+    for v in Vp_sub:
+        if cutoff <= 0.0:
+            # only itself at distance 0
+            Q.append(v)
+            continue
+        dist_map = nx.single_source_dijkstra_path_length(G, v, cutoff=cutoff, weight="weight")
+        # fallback: if for some reason cutoff returned empty (shouldn't), use v
+        Q.append(random.choice(list(dist_map.keys())) if dist_map else v)
+
+    return Vp_sub, Q
+
 
 
 
@@ -946,17 +1097,61 @@ if __name__ == "__main__":
 
 
     # halving + multibend comparison + Excel
-    # run the comparison once
-    res_cmp = simulate_halving_compare_multibend("256grid_diameter30test.edgelist")
+    # # run the comparison once
+    # res_cmp = simulate_halving_compare_multibend("256grid_diameter30test.edgelist")
 
-    # save raw + averaged with three error stats
+    # # save raw + averaged with three error stats
+    # save_compare_results_to_excel(res_cmp, n=256, filename="mb_compare_256.xlsx",
+    #                               graph_file="256grid_diameter30test.edgelist")
+
+    # # later: plot from Excel; pick which error to show on the left
+    # # plot_mb_vs_ours_from_excel("mb_compare_256.xlsx", use_avg=True, use_log_x=True, error_metric="ErrAvg")
+    # # # or
+    # plot_mb_vs_ours_from_excel("mb_compare_256.xlsx", use_avg=True, use_log_x=True, error_metric="ErrMax")
+    # # # or
+    # # plot_mb_vs_ours_from_excel("mb_compare_256.xlsx", use_avg=True, use_log_x=True, error_metric="ErrMin")
+
+
+    # ===== Halving + MultiBend + Subset + Excel (newest flow) =====
+
+    # res_cmp = simulate_halving_compare_multibend(
+    #     "256grid_diameter30test.edgelist",
+    #     q_size_mode="uniform",   # or "halving" / "fixed"
+    #     q_fixed=None,            # e.g. 0.5 or 18 if mode="fixed"
+    #     verbose_batch=True,      # <— turn on prints
+    #     print_limit=30           # trim long lists in console logs
+    # )
+
+
+    # # If we want fixed |Q|, e.g. always half of |P|, run:
+    res_cmp = simulate_halving_compare_multibend(
+            "256grid_diameter30test.edgelist",
+            q_size_mode="fixed",   # or "halving" / "fixed"
+            q_fixed=0.5,            # e.g. 0.5 or 18 if mode="fixed"
+            verbose_batch=True,      # <— turn on prints
+            print_limit=30           # trim long lists in console logs
+    )
+
+    # If want a fixed count, run:                                        
+    # res_cmp = simulate_halving_compare_multibend(
+    #     "256grid_diameter30test.edgelist",
+    #     q_size_mode="fixed",   # or "halving" / "fixed"
+    #     q_fixed=18,            # e.g. 0.5 or 18 if mode="fixed"
+    #     verbose_batch=True,      # <— turn on prints
+    #     print_limit=30           # trim long lists in console logs
+    # )
+
+
     save_compare_results_to_excel(res_cmp, n=256, filename="mb_compare_256.xlsx",
                                   graph_file="256grid_diameter30test.edgelist")
 
-    # later: plot from Excel; pick which error to show on the left
-    # plot_mb_vs_ours_from_excel("mb_compare_256.xlsx", use_avg=True, use_log_x=True, error_metric="ErrAvg")
-    # # or
-    plot_mb_vs_ours_from_excel("mb_compare_256.xlsx", use_avg=True, use_log_x=True, error_metric="ErrMax")
-    # # or
-    # plot_mb_vs_ours_from_excel("mb_compare_256.xlsx", use_avg=True, use_log_x=True, error_metric="ErrMin")
+    # # Plot vs |P| (backward-compatible)
+    # plot_mb_vs_ours_from_excel("mb_compare_256.xlsx", use_avg=True, use_log_x=True,
+    #                            error_metric="ErrMax", group_by="P")
+
+    # Or plot vs |Q|
+    plot_mb_vs_ours_from_excel("mb_compare_256.xlsx", use_avg=True, use_log_x=True,
+                               error_metric="ErrMax", group_by="Q")
+
+    
 
