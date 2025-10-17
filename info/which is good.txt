@@ -1,3 +1,5 @@
 Aile samma ko good file for error and stretch plots with comparison to multi bend: run1250311.py
 
 subset wala good: run125031102.py
+
+prediction aware directory banauda (compares pred aware directory with multibend): run1250402.py 
