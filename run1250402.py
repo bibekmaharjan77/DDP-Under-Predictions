@@ -13,7 +13,7 @@ import datetime as dt
 PREDICTION_FRACTIONS = [0.03125, 0.0625, 0.125, 0.25, 0.5]
 ERROR_VALUES = [999999999999999999999999999999999999, 10, 5, 3.33333333333333333333333333, 2.5, 2]
 ERROR_VALUES_2       = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
-NUM_TRIALS           = 10
+NUM_TRIALS           = 50
 DEBUG                = True
 down_link = {}
 
@@ -942,13 +942,14 @@ def plot_mb_vs_ours_from_excel(filename, use_avg=True, err_levels=None,
 
         # ---------------- Right: stretches ----------------
         ax = axes[1]
-        ax.plot(xvals*0.985, avg["OurStr"], "-o", label=f"Our Stretch for ErrRate ≤ {e:.1f}", zorder=3)
-        ax.plot(xvals*1.015, avg["MBStr"], "--s", label=f"MultiBend Stretch for ErrRate ≤ {e:.1f}", alpha=0.85, zorder=2)
+        ax.plot(xvals*0.985, avg["OurStr"], "-o", label=f"PMultibend Stretch for ErrRate ≤ {e:.1f}", zorder=3)
+        ax.plot(xvals*1.015, avg["MBStr"], "--s", label=f"MultiBend Stretch", alpha=0.85, zorder=2)
+        # ax.plot(xvals*1.015, avg["MBStr"], "--s", label=f"MultiBend Stretch for ErrRate ≤ {e:.1f}", alpha=0.85, zorder=2)
 
         ymax = float(np.nanmax([avg["OurStr"].max(), avg["MBStr"].max()]))
         ax.set_ylim(0, ymax * 1.05)
 
-        ax.set_title("Our Stretch vs Multibend Stretch")
+        ax.set_title("PMultibend Stretch vs Multibend Stretch")
         ax.set_ylabel("Stretch")
         ax.set_xlabel(f"Number of predicted nodes among {n} nodes")
         if use_log_x:

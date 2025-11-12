@@ -3,3 +3,7 @@ Aile samma ko good file for error and stretch plots with comparison to multi ben
 subset wala good: run125031102.py
 
 prediction aware directory banauda (compares pred aware directory with multibend): run1250402.py 
+
+then, error plot hatayera stretch plot matra rakheko is run1250403.py
+
+run1250404 bata chai sir lai pathako wala plots (pmultibend vs multibend). it also has a function that tries to plot box and whisker plot which doesn't work good as of now.
