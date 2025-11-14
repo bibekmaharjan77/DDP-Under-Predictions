@@ -1169,20 +1169,20 @@ if __name__ == "__main__":
 
     # halving + multibend comparison + Excel
     # run the comparison once
-    res_cmp = simulate_halving_compare_multibend("256grid_diameter30test.edgelist")
+    res_cmp = simulate_halving_compare_multibend("64grid_diameter14test.edgelist")
 
     # save raw + averaged with three error stats
-    save_compare_results_to_excel(res_cmp, n=256, filename="testing101.xlsx",
-                                  graph_file="256grid_diameter30test.edgelist")
+    save_compare_results_to_excel(res_cmp, n=64, filename="useavg_false_64_node.xlsx",
+                                  graph_file="64grid_diameter14test.edgelist")
     
     # print terminal summary for all error bands
-    print_stretch_summary_from_excel("testing101.xlsx", err_levels=None)
+    print_stretch_summary_from_excel("useavg_false_64_node.xlsx", err_levels=None)
 
     # later: plot from Excel; pick which error to show on the left
     # plot_mb_vs_ours_from_excel("mb_compare_256.xlsx", use_avg=True, use_log_x=True, error_metric="ErrAvg")
     # # or
     # plot_mb_vs_ours_from_excel("testing101.xlsx", use_avg=True, use_log_x=True, error_metric="ErrMax")
-    plot_stretch_minmax_avg_from_excel("testing101.xlsx", use_avg=True, use_log_x=True, error_metric="ErrMax")
+    plot_stretch_minmax_avg_from_excel("useavg_false_64_node.xlsx", use_avg=True, use_log_x=True, error_metric="ErrMax")
 
     # # or
     # plot_mb_vs_ours_from_excel("mb_compare_256.xlsx", use_avg=True, use_log_x=True, error_metric="ErrMin")
