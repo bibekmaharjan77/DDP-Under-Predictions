@@ -9,3 +9,12 @@ then, error plot hatayera stretch plot matra rakheko is run1250403.py
 run1250404 bata chai sir lai pathako wala plots (pmultibend vs multibend). it also has a function that tries to plot box and whisker plot which doesn't work good as of now.
 
 406 wala is good for the box and whisker plot with min avg and max
+
+need to add error concept / err plot in this cluster implementation.
+
+error = max of { 
+                [ up hops q (in directory) + down hops q (in directory) + obj (shortest path from obj to actual requester q in G)] 
+                    - 
+                [ up hops p (in directory) + down hops p (in directory) + obj (shortest path from obj to predicted requester p in G)]
+                } 
+                    
