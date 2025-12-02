@@ -932,6 +932,14 @@ def plot_mb_vs_ours_from_excel(filename, use_avg=True, err_levels=None,
 
     meta = pd.read_excel(filename, sheet_name="meta")
     n = int(meta["n"].iloc[0])
+    graph_file = meta["graph_file"].iloc[0]
+
+    # NEW: compute diameter of the graph once
+    if isinstance(graph_file, str) and graph_file:
+        G = load_graph(graph_file)
+        graph_diam = nx.diameter(G, weight="weight")  # or weight=None if your graph is unweighted
+    else:
+        graph_diam = 1.0  # safe fallback to avoid division by zero
 
     if use_avg:
         df = pd.read_excel(filename, sheet_name="avg")
@@ -987,9 +995,13 @@ def plot_mb_vs_ours_from_excel(filename, use_avg=True, err_levels=None,
         # ========= 2) Max prediction cost difference figure =========
         fig2, ax2 = plt.subplots(1, 1, figsize=(7, 5), constrained_layout=True)
 
-        ax2.plot(x, avg["OurCostDiff"], "-o", label=f"Max(cost(q) − cost(p)), err ≤ {e:.1f}")
+        # normalize by the diameter of the graph
+        norm_costdiff = avg["OurCostDiff"] / graph_diam
 
-        ax2.set_ylabel("Max prediction cost difference")
+        ax2.plot(x, norm_costdiff, "-o",
+                 label=f"Max( (cost(q) − cost(p)) / diam(G) ), err ≤ {e:.1f}")
+
+        ax2.set_ylabel("prediction error")
         ax2.set_xlabel(f"Number of predicted nodes among {n} nodes")
         if use_log_x:
             try: ax2.set_xscale("log", base=2)
@@ -997,7 +1009,7 @@ def plot_mb_vs_ours_from_excel(filename, use_avg=True, err_levels=None,
         ax2.set_xticks(x)
         ax2.grid(True, axis="y", alpha=0.35)
         ax2.legend(loc="best")
-        ax2.set_title(f"Max prediction penalty vs |P| (err ≤ {e:.1f})")
+        ax2.set_title(f"Max prediction error vs |P| (normalized by diam(G)(err ≤ {e:.1f})")
 
         if save:
             out2 = f"{prefix}_costdiff_err_{str(e).replace('.','p')}.png"
