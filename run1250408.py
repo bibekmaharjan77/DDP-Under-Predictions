@@ -941,6 +941,8 @@ def plot_mb_vs_ours_from_excel(filename, use_avg=True, err_levels=None,
     else:
         graph_diam = 1.0  # safe fallback to avoid division by zero
 
+    print(f"Graph diameter for normalization: {graph_diam}")
+
     if use_avg:
         df = pd.read_excel(filename, sheet_name="avg")
     else:

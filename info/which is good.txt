@@ -18,4 +18,6 @@ error = max of {
                 [ up hops p (in directory) + down hops p (in directory) + obj (shortest path from obj to predicted requester p in G)]
                 } 
 
-0407 wala ma cost difference plot gareko                    
+0407 wala ma cost difference plot gareko
+
+0408 wala ma cost difference as prediction error normalized by diam ho.
