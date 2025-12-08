@@ -594,7 +594,7 @@ def plot_results_halving_counts(results, n=None, title_suffix=" (halving mode)",
     plt.show()
 
 
-# --------- MultiBend comparison ----------------------------
+# --------- MultiBend comparison (all |P| in halving mode) ----------------------------
 
 def multibend_move_sequence_stretch(requesters, owner, leader_map, G, weight=None, trace=False):
     """
@@ -719,7 +719,7 @@ def simulate_halving_compare_multibend(graph_file):
     return results
 
 
-# --------- Excel helpers ----------------------------
+# --------- Excel helpers for halving+MB ----------------------------
 
 def save_compare_results_to_excel(results, n, filename, graph_file=None):
     """
@@ -819,20 +819,16 @@ def plot_mb_vs_ours_from_excel(filename, use_avg=True, err_levels=None,
             plt.show()
 
 
-# --------- NEW: stretch vs error cutoff for fixed |P| -----------------
+# --------- Stretch vs error cutoff for one fixed |P| (from Excel) ---------
 
 def plot_stretch_vs_error_for_fixed_count_from_excel(filename, k,
                                                      use_log_x=False,
                                                      save=False,
                                                      prefix="stretch_vs_error_k"):
     """
-    New helper for supervisor:
-      - Fix number of predicted nodes |P| = k
-      - Fix n (comes from the Excel meta)
-      - X-axis: ErrRate (0.0, 0.1, ..., 0.5)
-      - Y-axis: Our stretch and MB stretch
-
-    This lets you see how stretch changes as the error cutoff changes.
+    For a fixed |P| = k and single graph (Excel file from halving+MB pipeline):
+    X-axis: ErrRate (0.0, 0.1, ..., 0.5)
+    Y-axis: Our stretch and MB stretch.
     """
     meta = pd.read_excel(filename, sheet_name="meta")
     n = int(meta["n"].iloc[0])
@@ -867,7 +863,7 @@ def plot_stretch_vs_error_for_fixed_count_from_excel(filename, k,
     ax.set_title(title)
 
     if use_log_x:
-        # Be careful: ErrRate includes 0.0; usually keep linear here.
+        # Usually keep this linear; ErrRate includes 0.0.
         try:
             ax.set_xscale("log", base=10)
         except TypeError:
@@ -886,34 +882,185 @@ def plot_stretch_vs_error_for_fixed_count_from_excel(filename, k,
         plt.show()
 
 
+# ==================== NEW: fixed-|P| simulator & cross-n plots ====================
+
+def simulate_halving_compare_multibend_fixedP(graph_file, k):
+    """
+    Like simulate_halving_compare_multibend, but for a single fixed |P| = k.
+    Returns rows: (ErrRate, OurStr, MBStr) for that graph.
+    """
+    G = load_graph(graph_file)
+    n = G.number_of_nodes()
+    size = int(math.sqrt(n))
+
+    H_base = build_mesh_hierarchy(size)
+    results = []
+
+    for error in ERROR_VALUES:
+        err_rate = 0.0 if error > 15 else round(1.0 / error, 1)
+
+        for _ in range(NUM_TRIALS):
+            owner_start = random.choice(list(G.nodes()))
+
+            P = choose_Vp_halving(G, k)
+            Q = sample_Q_within_diameter(G, P, error)
+
+            # leaders for MB baseline and prediction-aware scheme
+            leaders_base = assign_cluster_leaders(H_base, seed=None, prefer=None)
+            leaders_pred = assign_cluster_leaders(H_base, seed=None, prefer=P)
+
+            owner_ours = owner_start
+            owner_mb   = owner_start
+            publish(owner_ours, leaders_pred)
+            publish(owner_mb,   leaders_base)
+
+            for req in Q:
+                if req == owner_ours:
+                    owner_ours = req
+                    owner_mb   = req
+                    publish(owner_ours, leaders_pred)
+                    publish(owner_mb,   leaders_base)
+                    continue
+
+                our_str = measure_stretch_move([req], owner_ours, leaders_pred, G, trace=False)
+                owner_ours = req
+                publish(owner_ours, leaders_pred)
+
+                mb_str = multibend_move_sequence_stretch([req], owner_mb, leaders_base, G)
+                owner_mb = req
+                publish(owner_mb, leaders_base)
+
+                results.append((err_rate, our_str, mb_str))
+
+    return results
+
+
+def plot_stretch_vs_error_from_results(results, n, k):
+    """
+    Convenience: for one graph & fixed |P| = k, plot stretch vs error cutoff
+    without going through Excel.
+    """
+    df = pd.DataFrame(results, columns=["ErrRate", "OurStr", "MBStr"])
+    avg = df.groupby("ErrRate", as_index=False).mean(numeric_only=True).sort_values("ErrRate")
+
+    x = avg["ErrRate"].to_numpy(float)
+
+    fig, ax = plt.subplots(1, 1, figsize=(7,5), constrained_layout=True)
+
+    ax.plot(x, avg["OurStr"], "-o", label="PMultiBend", zorder=3)
+    ax.plot(x, avg["MBStr"], "--s", label="MultiBend", alpha=0.85, zorder=2)
+
+    ymax = float(np.nanmax([avg["OurStr"].max(), avg["MBStr"].max()]))
+    ax.set_ylim(0, ymax * 1.05)
+
+    ax.set_xlabel("Error cutoff (ErrRate)")
+    ax.set_ylabel("Stretch")
+    ax.set_title(f"Stretch vs error cutoff for |P| = {k} (n = {n})")
+    ax.set_xticks(x)
+    ax.grid(True, axis="y", alpha=0.35)
+    ax.legend(loc="best")
+    plt.show()
+
+
+def run_across_graphs_fixed_fraction(graph_files, frac):
+    """
+    For a fixed prediction fraction 'frac' (e.g. 0.5 for n/2),
+    run PMultiBend vs MultiBend on each graph in graph_files.
+
+    graph_files: list of (filename, n) pairs.
+
+    Returns a DataFrame with columns:
+        n, ErrRate, OurStr, MBStr
+    averaged over NUM_TRIALS per graph.
+    """
+    rows = []
+
+    for graph_file, n in graph_files:
+        k = int(round(frac * n))
+        print(f"Running {graph_file} with n={n}, |P|={k} (frac={frac})")
+        results = simulate_halving_compare_multibend_fixedP(graph_file, k)
+
+        for (err_rate, our_str, mb_str) in results:
+            rows.append((n, err_rate, our_str, mb_str))
+
+    df = pd.DataFrame(rows, columns=["n", "ErrRate", "OurStr", "MBStr"])
+    avg = df.groupby(["n", "ErrRate"], as_index=False).mean(numeric_only=True)
+    return avg
+
+
+def plot_stretch_vs_n_for_fixed_fraction(avg_df, frac, use_log_x=False):
+    """
+    New plot your supervisor asked for:
+
+      - fixed prediction fraction 'frac' (|P| = frac * n)
+      - x-axis: number of nodes n (different graphs)
+      - one figure per ErrRate in ERROR_VALUES_2
+      - curves: PMultiBend vs MultiBend
+    """
+    for e in ERROR_VALUES_2:
+        sub = avg_df[avg_df["ErrRate"] == e].sort_values("n")
+        if sub.empty:
+            continue
+
+        x = sub["n"].to_numpy(float)
+
+        plt.figure(figsize=(7,5))
+        plt.plot(x, sub["OurStr"], "-o", label="PMultiBend")
+        plt.plot(x, sub["MBStr"], "--s", label="MultiBend")
+
+        if use_log_x:
+            try:
+                plt.xscale("log", base=2)
+            except TypeError:
+                plt.xscale("log", basex=2)
+
+        plt.xticks(x, [str(int(v)) for v in x])
+        plt.grid(True, axis="y", alpha=0.35)
+        plt.ylabel("Stretch")
+        plt.xlabel("Number of nodes n")
+        plt.title(f"Stretch vs n for |P| = {frac}·n  (ErrRate ≤ {e:.1f})")
+        plt.legend(loc="best")
+        plt.tight_layout()
+        plt.show()
+
+
 # ---------------------------- MAIN ----------------------------
 
 if __name__ == "__main__":
 
-    # Example: halving + MultiBend comparison on a 64-node grid graph
-    res_cmp = simulate_halving_compare_multibend("256grid_diameter30test.edgelist")
+    # ================== A) OLD: run halving+MB on ONE graph, save to Excel ==================
+    # (Uncomment if you still want this behaviour.)
+    #
+    # res_cmp = simulate_halving_compare_multibend("256grid_diameter30test.edgelist")
+    # save_compare_results_to_excel(
+    #     res_cmp, n=256,
+    #     filename="sirlaipathauna_random_leaders_mb_compare_256.xlsx",
+    #     graph_file="256grid_diameter30test.edgelist"
+    # )
+    # plot_mb_vs_ours_from_excel(
+    #     "sirlaipathauna_random_leaders_mb_compare_256.xlsx",
+    #     use_avg=True,
+    #     use_log_x=True,
+    #     error_metric="ErrMax"
+    # )
+    # plot_stretch_vs_error_for_fixed_count_from_excel(
+    #     "sirlaipathauna_random_leaders_mb_compare_256.xlsx",
+    #     k=128,   # example: n/2 when n=256
+    #     use_log_x=False
+    # )
 
-    # Save raw + aggregated results
-    xlsx_name = "sirlaipathauna_random_leaders_mb_compare_64.xlsx"
-    save_compare_results_to_excel(
-        res_cmp, n=256,
-        filename=xlsx_name,
-        graph_file="256grid_diameter30test.edgelist"
-    )
+    # ================== B) NEW: cross-n experiment (x-axis = number of nodes) ===============
 
-    # Old view: stretch vs |P|, one figure per error cutoff
-    plot_mb_vs_ours_from_excel(
-        xlsx_name,
-        use_avg=True,
-        use_log_x=True,
-        error_metric="ErrMax"
-    )
+    # Replace the filenames below with the actual files you have in graphs/grid/
+    GRAPH_FILES = [
+        ("64grid_diameter14test.edgelist", 64),
+        ("144grid_diameter22test.edgelist", 144),
+        ("256grid_diameter30test.edgelist", 256),
+        ("576grid_diameter46test.edgelist", 576),
+    ]
 
-    # NEW view: for a fixed |P|, plot stretch vs error cutoff (ErrRate).
-    # Example: |P| = 32 (n/2 when n = 64)
-    # Uncomment and adjust k as needed:
-    plot_stretch_vs_error_for_fixed_count_from_excel(
-        xlsx_name,
-        k=64,
-        use_log_x=False
-    )
+    # Fixed prediction fraction: e.g. 0.5 for |P| = n/2, 0.25 for n/4, etc.
+    frac = 0.125
+
+    avg_across = run_across_graphs_fixed_fraction(GRAPH_FILES, frac)
+    plot_stretch_vs_n_for_fixed_fraction(avg_across, frac, use_log_x=False)
