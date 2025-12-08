@@ -12,6 +12,7 @@ run1250404 bata chai sir lai pathako wala plots (pmultibend vs multibend). it al
 
 need to add error concept / err plot in this cluster implementation.
 
+----khasai kaam lagena yo gareko-------
 error = max of { 
                 [ up hops q (in directory) + down hops q (in directory) + obj (shortest path from obj to actual requester q in G)] 
                     - 
@@ -21,3 +22,6 @@ error = max of {
 0407 wala ma cost difference plot gareko
 
 0408 wala ma cost difference as prediction error normalized by diam ho.
+------------------
+
+409 has fixed prediction fraction, num of nodes and varying err rate (err cutoff) on x axis
