@@ -1015,11 +1015,11 @@ def plot_stretch_vs_n_for_fixed_fraction(avg_df, frac, use_log_x=False):
                 plt.xscale("log", basex=2)
 
         plt.xticks(x, [str(int(v)) for v in x])
-        plt.grid(True, axis="y", alpha=0.35)
+        plt.grid(False)
         plt.ylabel("Stretch")
         plt.xlabel("Number of nodes n")
-        plt.title(f"Stretch vs n for |P| = {frac}·n  (ErrRate ≤ {e:.1f})")
-        plt.legend(loc="best")
+        # plt.title(f"Stretch vs n for |P| = {frac}·n  (ErrRate ≤ {e:.1f})")
+        plt.legend(loc="lower right")
         plt.tight_layout()
         plt.show()
 
@@ -1060,7 +1060,7 @@ if __name__ == "__main__":
     ]
 
     # Fixed prediction fraction: e.g. 0.5 for |P| = n/2, 0.25 for n/4, etc.
-    frac = 0.125
+    frac = 0.03125 # 1/32
 
     avg_across = run_across_graphs_fixed_fraction(GRAPH_FILES, frac)
     plot_stretch_vs_n_for_fixed_fraction(avg_across, frac, use_log_x=False)

@@ -806,9 +806,9 @@ def plot_mb_vs_ours_from_excel(filename, use_avg=True, err_levels=None,
             except TypeError:
                 ax.set_xscale("log", basex=2)
         ax.set_xticks(x)
-        ax.grid(True, axis="y", alpha=0.35)
-        ax.legend(loc="best")
-        ax.set_title(f"Stretch vs |P| (err ≤ {e:.1f})")
+        ax.grid(False)
+        ax.legend(loc="lower right")
+        # ax.set_title(f"Stretch vs |P| (err ≤ {e:.1f})")
 
         if save:
             out = f"{prefix}_stretch_only_err_{str(e).replace('.','p')}.png"
@@ -863,8 +863,8 @@ def plot_stretch_vs_error_for_fixed_count_from_excel(filename, k,
 
     ax.set_xlabel("Error cutoff (ErrRate)")
     ax.set_ylabel("Stretch")
-    title = f"Stretch vs error cutoff for |P| = {k} (n = {n})"
-    ax.set_title(title)
+    # title = f"Stretch vs error cutoff for |P| = {k} (n = {n})"
+    # ax.set_title(title)
 
     if use_log_x:
         # Be careful: ErrRate includes 0.0; usually keep linear here.
@@ -874,8 +874,8 @@ def plot_stretch_vs_error_for_fixed_count_from_excel(filename, k,
             ax.set_xscale("log", basex=10)
 
     ax.set_xticks(x)
-    ax.grid(True, axis="y", alpha=0.35)
-    ax.legend(loc="best")
+    ax.grid(False)
+    ax.legend(loc="lower right")
 
     if save:
         out = f"{prefix}_k_{k}.png"
@@ -891,14 +891,14 @@ def plot_stretch_vs_error_for_fixed_count_from_excel(filename, k,
 if __name__ == "__main__":
 
     # Example: halving + MultiBend comparison on a 64-node grid graph
-    res_cmp = simulate_halving_compare_multibend("256grid_diameter30test.edgelist")
+    res_cmp = simulate_halving_compare_multibend("64grid_diameter14test.edgelist")
 
     # Save raw + aggregated results
     xlsx_name = "sirlaipathauna_random_leaders_mb_compare_64.xlsx"
     save_compare_results_to_excel(
-        res_cmp, n=256,
+        res_cmp, n=64,
         filename=xlsx_name,
-        graph_file="256grid_diameter30test.edgelist"
+        graph_file="64grid_diameter14test.edgelist"
     )
 
     # Old view: stretch vs |P|, one figure per error cutoff
