@@ -861,7 +861,7 @@ def plot_stretch_vs_error_for_fixed_count_from_excel(filename, k,
     ymax = float(np.nanmax([avg["OurStr"].max(), avg["MBStr"].max()]))
     ax.set_ylim(0, ymax * 1.05)
 
-    ax.set_xlabel("Error cutoff (ErrRate)")
+    ax.set_xlabel("Error cutoff")
     ax.set_ylabel("Stretch")
     # title = f"Stretch vs error cutoff for |P| = {k} (n = {n})"
     # ax.set_title(title)
@@ -891,23 +891,23 @@ def plot_stretch_vs_error_for_fixed_count_from_excel(filename, k,
 if __name__ == "__main__":
 
     # Example: halving + MultiBend comparison on a 64-node grid graph
-    res_cmp = simulate_halving_compare_multibend("64grid_diameter14test.edgelist")
+    res_cmp = simulate_halving_compare_multibend("1024grid_diameter62test.edgelist")
 
     # Save raw + aggregated results
     xlsx_name = "sirlaipathauna_random_leaders_mb_compare_64.xlsx"
     save_compare_results_to_excel(
-        res_cmp, n=64,
+        res_cmp, n=1024,
         filename=xlsx_name,
-        graph_file="64grid_diameter14test.edgelist"
+        graph_file="1024grid_diameter62test.edgelist"
     )
 
-    # Old view: stretch vs |P|, one figure per error cutoff
-    plot_mb_vs_ours_from_excel(
-        xlsx_name,
-        use_avg=True,
-        use_log_x=True,
-        error_metric="ErrMax"
-    )
+    # # Old view: stretch vs |P|, one figure per error cutoff
+    # plot_mb_vs_ours_from_excel(
+    #     xlsx_name,
+    #     use_avg=True,
+    #     use_log_x=True,
+    #     error_metric="ErrMax"
+    # )
 
     # NEW view: for a fixed |P|, plot stretch vs error cutoff (ErrRate).
     # Example: |P| = 32 (n/2 when n = 64)
