@@ -910,14 +910,20 @@ def plot_mb_vs_ours_from_excel(filename, use_avg=True, err_levels=None,
         if sub.empty:
             continue
         avg = sub.sort_values("Count")
-        x = avg["Count"].to_numpy(dtype=float)
+
+        # x = avg["Count"].to_numpy(dtype=float)
+        x_labels = avg["Count"].to_numpy()
+        x_pos = np.arange(len(x_labels))
 
         fig, ax = plt.subplots(1, 1, figsize=(7, 5), constrained_layout=True)
 
         # ---- Stretch only ----
-        # ax.plot(x*0.985, avg["OurStr"], "-o", label=f"PMultiBend (err ≤ {e:.1f})", zorder=3)
-        ax.plot(x*0.985, avg["OurStr"], "-o", label=f"PMultiBend", zorder=3)
-        ax.plot(x*1.015, avg["MBStr"], "--s", label="MultiBend", alpha=0.85, zorder=2)
+        # # ax.plot(x*0.985, avg["OurStr"], "-o", label=f"PMultiBend (err ≤ {e:.1f})", zorder=3)
+        # ax.plot(x*0.985, avg["OurStr"], "-o", label=f"PMultiBend", zorder=3)
+        # ax.plot(x*1.015, avg["MBStr"], "--s", label="MultiBend", alpha=0.85, zorder=2)
+        ax.plot(x_pos - 0.015, avg["OurStr"], "-o", label="PMultiBend", zorder=3)
+        ax.plot(x_pos + 0.015, avg["MBStr"], "--s", label="MultiBend", alpha=0.85, zorder=2)
+
 
         ymax = float(np.nanmax([avg["OurStr"].max(), avg["MBStr"].max()]))
         ax.set_ylim(0, ymax * 1.05)
@@ -927,7 +933,11 @@ def plot_mb_vs_ours_from_excel(filename, use_avg=True, err_levels=None,
         if use_log_x:
             try: ax.set_xscale("log", base=2)
             except TypeError: ax.set_xscale("log", basex=2)
-        ax.set_xticks(x)
+        
+        # ax.set_xticks(x)
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(x_labels)
+
         ax.grid(False)
         ax.legend(loc="lower right")
 
@@ -1070,11 +1080,11 @@ if __name__ == "__main__":
 
     # halving + multibend comparison + Excel
     # run the comparison once
-    res_cmp = simulate_halving_compare_multibend("1024grid_diameter62test.edgelist")
+    res_cmp = simulate_halving_compare_multibend("64grid_diameter14test.edgelist")
 
     # save raw + averaged with three error stats
-    save_compare_results_to_excel(res_cmp, n=1024, filename="sirlaipathauna_random_leaders_mb_compare_64.xlsx",
-                                  graph_file="1024grid_diameter62test.edgelist")
+    save_compare_results_to_excel(res_cmp, n=64, filename="sirlaipathauna_random_leaders_mb_compare_64.xlsx",
+                                  graph_file="64grid_diameter14test.edgelist")
 
     # later: plot from Excel; pick which error to show on the left
     # plot_mb_vs_ours_from_excel("mb_compare_256.xlsx", use_avg=True, use_log_x=True, error_metric="ErrAvg")
