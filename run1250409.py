@@ -891,6 +891,10 @@ def plot_stretch_vs_error_for_fixed_count_from_excel(filename, k,
 if __name__ == "__main__":
 
     # Example: halving + MultiBend comparison on a 64-node grid graph
+    # res_cmp = simulate_halving_compare_multibend("64grid_diameter14test.edgelist")
+    # res_cmp = simulate_halving_compare_multibend("144grid_diameter22test.edgelist")
+    # res_cmp = simulate_halving_compare_multibend("256grid_diameter30test.edgelist")
+    # res_cmp = simulate_halving_compare_multibend("576grid_diameter46test.edgelist")
     res_cmp = simulate_halving_compare_multibend("1024grid_diameter62test.edgelist")
 
     # Save raw + aggregated results
@@ -914,6 +918,6 @@ if __name__ == "__main__":
     # Uncomment and adjust k as needed:
     plot_stretch_vs_error_for_fixed_count_from_excel(
         xlsx_name,
-        k=64,
+        k=512,
         use_log_x=False
     )

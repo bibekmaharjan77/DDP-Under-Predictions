@@ -1080,11 +1080,11 @@ if __name__ == "__main__":
 
     # halving + multibend comparison + Excel
     # run the comparison once
-    res_cmp = simulate_halving_compare_multibend("64grid_diameter14test.edgelist")
+    res_cmp = simulate_halving_compare_multibend("1024grid_diameter62test.edgelist")
 
     # save raw + averaged with three error stats
-    save_compare_results_to_excel(res_cmp, n=64, filename="sirlaipathauna_random_leaders_mb_compare_64.xlsx",
-                                  graph_file="64grid_diameter14test.edgelist")
+    save_compare_results_to_excel(res_cmp, n=1024, filename="sirlaipathauna_random_leaders_mb_compare_64.xlsx",
+                                  graph_file="1024grid_diameter62test.edgelist")
 
     # later: plot from Excel; pick which error to show on the left
     # plot_mb_vs_ours_from_excel("mb_compare_256.xlsx", use_avg=True, use_log_x=True, error_metric="ErrAvg")

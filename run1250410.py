@@ -1062,7 +1062,7 @@ if __name__ == "__main__":
     ]
 
     # Fixed prediction fraction: e.g. 0.5 for |P| = n/2, 0.25 for n/4, etc.
-    frac = 0.125
+    frac = 0.03125
 
     avg_across = run_across_graphs_fixed_fraction(GRAPH_FILES, frac)
     plot_stretch_vs_n_for_fixed_fraction(avg_across, frac, use_log_x=False)
